@@ -32,7 +32,7 @@ class SqliteDBRepository:
         conn.close()
 
     def _ensure_recording_columns(self) -> None:
-        """Migration: add file_extension, recorded_at, and folder columns if missing on existing DB."""
+        """Migration: add file_extension, recorded_at, folder, and transcription_status columns if missing on existing DB."""
         conn = self._connect()
         try:
             try:
@@ -50,6 +50,11 @@ class SqliteDBRepository:
             except Exception:
                 conn.execute("ALTER TABLE recording ADD COLUMN folder TEXT NOT NULL DEFAULT '/'")
                 conn.commit()
+            try:
+                conn.execute("SELECT transcription_status FROM recording LIMIT 1")
+            except Exception:
+                conn.execute("ALTER TABLE recording ADD COLUMN transcription_status TEXT NOT NULL DEFAULT 'idle'")
+                conn.commit()
         finally:
             conn.close()
 
@@ -57,7 +62,7 @@ class SqliteDBRepository:
         conn = self._connect()
         try:
             result = conn.execute(
-                "SELECT id, name, label, duration, file_extension, recorded_at, created_at, transcript, folder "
+                "SELECT id, name, label, duration, file_extension, recorded_at, created_at, transcript, folder, transcription_status "
                 "FROM recording"
             )
             db_files = result.fetchall()
@@ -72,7 +77,7 @@ class SqliteDBRepository:
         conn = self._connect()
         try:
             result = conn.execute(
-                "SELECT id, name, label, duration, file_extension, recorded_at, created_at, transcript, folder "
+                "SELECT id, name, label, duration, file_extension, recorded_at, created_at, transcript, folder, transcription_status "
                 "FROM recording WHERE name = ?",
                 (name,),
             )
@@ -129,6 +134,15 @@ class SqliteDBRepository:
         conn = self._connect()
         try:
             conn.execute("UPDATE recording SET transcript = ? WHERE name = ?", (transcript, name))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def set_transcription_status(self, name: str, status: str) -> None:
+        """Update the transcription lifecycle status: idle | queued | running | done | failed."""
+        conn = self._connect()
+        try:
+            conn.execute("UPDATE recording SET transcription_status = ? WHERE name = ?", (status, name))
             conn.commit()
         finally:
             conn.close()

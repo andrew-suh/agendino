@@ -170,6 +170,7 @@ class DashboardController:
                     "summary_count": len(self._sqlite_db_repository.get_summaries(bare_name)) if db_rec else 0,
                     "notion_url": latest_summary.notion_url if latest_summary else None,
                     "folder": db_rec.folder if db_rec else "/",
+                    "transcription_status": db_rec.transcription_status if db_rec else "idle",
                 }
             )
 
@@ -318,6 +319,21 @@ class DashboardController:
             if self._local_recordings_repository.exists(candidate):
                 return candidate, ext_dot.lstrip(".")
         return f"{bare_name}.hda", "hda"
+
+    def bare_name(self, name: str) -> str:
+        """Public accessor for the normalized (extension-stripped) recording name."""
+        return self._bare_name(name)
+
+    def get_cached_transcript(self, name: str) -> str | None:
+        """Return an already-saved transcript without triggering transcription, else None."""
+        db_rec = self._sqlite_db_repository.get_recording_by_name(self._bare_name(name))
+        if db_rec and db_rec.transcript:
+            return db_rec.transcript
+        return None
+
+    def set_transcription_status(self, name: str, status: str) -> None:
+        """Update the recording's transcription lifecycle status (idle/queued/running/done/failed)."""
+        self._sqlite_db_repository.set_transcription_status(self._bare_name(name), status)
 
     def transcribe_recording(self, name: str, engine: str = "gemini") -> dict:
         bare_name = self._bare_name(name)

@@ -9,3 +9,5 @@ icalendar
 recurring-ical-events
 mutagen
 faster-whisper
+celery[redis]
+redis

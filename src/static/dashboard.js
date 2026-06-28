@@ -18,6 +18,7 @@ const SUMMARY_UPDATE_URL = "/api/dashboard/summary";
 const DELETE_RECORDING_URL = "/api/dashboard/recording";
 const TASKS_GENERATE_URL = "/api/dashboard/tasks/generate";
 const TASKS_URL = "/api/dashboard/tasks";
+const TASK_STATUS_URL = "/api/dashboard/tasks/status";
 const UPLOAD_URL = "/api/dashboard/upload";
 const RECORDING_UPDATE_URL = "/api/dashboard/recording";
 const FOLDERS_URL = "/api/dashboard/folders";
@@ -1254,6 +1255,19 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".transcribe-engine-menu").forEach(m => m.classList.add("d-none"));
     });
 
+    // Poll a queued Celery task until it finishes.
+    // Resolves with the task's SUCCESS result; throws on FAILURE or timeout.
+    async function pollTaskStatus(taskId, { interval = 5000, maxAttempts = 720 } = {}) {
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const res = await fetch(`${TASK_STATUS_URL}/${encodeURIComponent(taskId)}`);
+            const data = await res.json();
+            if (data.status === "SUCCESS") return data.result;
+            if (data.status === "FAILURE") throw new Error(data.error || "Task failed");
+            await new Promise(r => setTimeout(r, interval));
+        }
+        throw new Error("Task timed out");
+    }
+
     // Start transcription helper
     async function startTranscription(name, engine, triggerBtn) {
         const engineLabel = engine === "whisper" ? "Whisper (local)" : "Gemini AI";
@@ -1275,11 +1289,19 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             const data = await res.json();
 
-            hide(modalLoading);
-            if (data.ok) {
+            if (data.status === "queued" || data.status === "already_running") {
+                // Queued on a Celery worker — poll until it finishes.
+                const result = await pollTaskStatus(data.task_id);
+                hide(modalLoading);
+                showTranscriptPreview(result.transcript);
+                await loadDashboard();
+            } else if (data.ok) {
+                // Already cached — returned synchronously.
+                hide(modalLoading);
                 showTranscriptPreview(data.transcript);
                 await loadDashboard();
             } else {
+                hide(modalLoading);
                 modalError.textContent = data.error;
                 show(modalError);
             }
@@ -1748,6 +1770,11 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             const data = await res.json();
 
+            // Queued on a Celery worker — wait for it to finish before refreshing.
+            if (data.ok && data.task_id) {
+                await pollTaskStatus(data.task_id);
+            }
+
             hide(summaryLoading);
             if (data.ok) {
                 const summariesRes = await fetch(`${SUMMARIES_URL}/${encodeURIComponent(currentSummarizeName)}`);
@@ -2137,16 +2164,22 @@ document.addEventListener("DOMContentLoaded", () => {
                 body: JSON.stringify({ summary_id: summaryId }),
             });
             const data = await res.json();
-            hide(tasksLoading);
 
-            if (data.ok && data.tasks && data.tasks.length > 0) {
+            if (data.ok && data.task_id) {
+                // Queued on a Celery worker — poll, then load the generated tasks.
+                await pollTaskStatus(data.task_id);
+                await loadTasks(summaryId);
+            } else if (data.ok && data.tasks && data.tasks.length > 0) {
+                hide(tasksLoading);
                 tasksContent.innerHTML = renderTasksList(data.tasks, summaryId);
                 show(tasksContent);
                 hide(tasksEmpty);
             } else if (data.ok) {
+                hide(tasksLoading);
                 hide(tasksContent);
                 show(tasksEmpty);
             } else {
+                hide(tasksLoading);
                 tasksError.textContent = data.error || "Task generation failed";
                 show(tasksError);
             }

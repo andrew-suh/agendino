@@ -1,7 +1,13 @@
+import uuid
+
+from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
+import task_locks
 from app import depends
+from celery_config import celery_app
+from celery_tasks import generate_tasks_task, summarize_audio_task, transcribe_audio_task
 from controllers.DashboardController import DashboardController, MIME_TYPES
 from models.dto.DeleteRecordingRequestDTO import DeleteRecordingRequestDTO
 from models.dto.FolderRequestDTO import CreateFolderRequestDTO, RenameFolderRequestDTO, DeleteFolderRequestDTO
@@ -55,7 +61,33 @@ async def transcribe_recording(
     body: TranscribeRequestDTO = TranscribeRequestDTO(),
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
-    return dashboard_controller.transcribe_recording(name, engine=body.engine)
+    # Already transcribed → return synchronously, no need to queue.
+    cached = dashboard_controller.get_cached_transcript(name)
+    if cached:
+        return {"ok": True, "transcript": cached, "cached": True}
+
+    bare = dashboard_controller.bare_name(name)
+    key = task_locks.transcribe_lock_key(bare)
+    task_id = str(uuid.uuid4())
+
+    # Claim the lock before queueing so duplicate requests across workers don't re-transcribe.
+    if task_locks.acquire(key, task_id):
+        dashboard_controller.set_transcription_status(bare, "queued")
+        transcribe_audio_task.apply_async(args=[bare, body.engine], task_id=task_id)
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "status": "queued",
+            "message": f"Transcription task queued: {task_id}",
+        }
+
+    # Another request is already transcribing this file — poll its task instead.
+    return {
+        "ok": True,
+        "task_id": task_locks.current_holder(key),
+        "status": "already_running",
+        "message": "Transcription already in progress",
+    }
 
 
 @router.get("/transcript/{name}")
@@ -88,7 +120,25 @@ async def summarize_recording(
     body: SummarizeRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
-    return dashboard_controller.summarize_recording(name, body.prompt_id)
+    bare = dashboard_controller.bare_name(name)
+    key = task_locks.summarize_lock_key(bare, body.prompt_id)
+    task_id = str(uuid.uuid4())
+
+    if task_locks.acquire(key, task_id):
+        summarize_audio_task.apply_async(args=[bare, body.prompt_id], task_id=task_id)
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "status": "queued",
+            "message": f"Summarization task queued: {task_id}",
+        }
+
+    return {
+        "ok": True,
+        "task_id": task_locks.current_holder(key),
+        "status": "already_running",
+        "message": "Summarization already in progress",
+    }
 
 
 @router.get("/summaries/{name}")
@@ -173,7 +223,50 @@ async def generate_tasks(
     body: GenerateTasksRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
-    return dashboard_controller.generate_tasks(body.summary_id)
+    key = task_locks.generate_lock_key(body.summary_id)
+    task_id = str(uuid.uuid4())
+
+    if task_locks.acquire(key, task_id):
+        generate_tasks_task.apply_async(args=[body.summary_id], task_id=task_id)
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "status": "queued",
+            "message": f"Task generation queued: {task_id}",
+        }
+
+    return {
+        "ok": True,
+        "task_id": task_locks.current_holder(key),
+        "status": "already_running",
+        "message": "Task generation already in progress",
+    }
+
+
+# ─── Async task status ───────────────────────────────────────────
+# NOTE: these /tasks/status/... routes must be declared BEFORE /tasks/{summary_id}
+# so the {summary_id} path param does not swallow "status".
+
+
+@router.get("/tasks/status/{task_id}")
+async def get_task_status(task_id: str):
+    result = AsyncResult(task_id, app=celery_app)
+    state = result.state
+
+    if state == "PROGRESS":
+        return {"task_id": task_id, "status": "PROGRESS", "meta": result.info}
+    if state == "SUCCESS":
+        return {"task_id": task_id, "status": "SUCCESS", "result": result.result}
+    if state == "FAILURE":
+        return {"task_id": task_id, "status": "FAILURE", "error": str(result.info)}
+    # PENDING (unknown/queued) or any custom state
+    return {"task_id": task_id, "status": state}
+
+
+@router.delete("/tasks/status/{task_id}")
+async def cancel_task(task_id: str):
+    celery_app.control.revoke(task_id, terminate=True)
+    return {"ok": True, "message": f"Task {task_id} revoked"}
 
 
 @router.get("/tasks/{summary_id}")

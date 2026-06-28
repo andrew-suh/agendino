@@ -11,3 +11,4 @@ mutagen
 faster-whisper
 celery[redis]
 redis
+anthropic

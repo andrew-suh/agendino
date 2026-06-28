@@ -10,6 +10,7 @@ from repositories.LocalRecordingsRepository import LocalRecordingsRepository
 from repositories.SqliteDBRepository import SqliteDBRepository
 from repositories.SystemPromptsRepository import SystemPromptsRepository
 from repositories.VectorStoreRepository import VectorStoreRepository
+from services.ClaudeSummarizationService import ClaudeSummarizationService
 from services.NotionService import NotionService
 from services.RAGService import RAGService
 from services.SummarizationService import SummarizationService
@@ -75,8 +76,23 @@ def get_whisper_transcription_service() -> WhisperTranscriptionService:
     )
 
 
-def get_summarization_service() -> SummarizationService:
+def get_summarization_service():
+    """Return the configured summarization service (Gemini by default, or Claude).
+
+    Transcription is unaffected — Claude has no audio input, so it is summarization-only.
+    """
     _config = get_config()
+    provider = _config.get("SUMMARIZATION_PROVIDER", "gemini").lower()
+    if provider == "claude":
+        api_key = _config.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "SUMMARIZATION_PROVIDER=claude requires ANTHROPIC_API_KEY to be set"
+            )
+        return ClaudeSummarizationService(
+            api_key=api_key,
+            model=_config.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
+        )
     return SummarizationService(api_key=_config["GEMINI_API_KEY"], model=_config["GEMINI_MODEL"])
 
 

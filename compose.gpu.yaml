@@ -1,8 +1,9 @@
 # GPU override for Whisper transcription (runs on the celery worker).
 #
 # Enable:  docker compose -f compose.yaml -f compose.gpu.yaml up -d
-# Or set in .env:  COMPOSE_FILE=compose.yaml:compose.gpu.yaml   (then plain `docker compose up -d`)
-# Disable: run plain `docker compose up -d` (CPU), or remove the COMPOSE_FILE line.
+# Or in .env:  uncomment GPU=1  (COMPOSE_FILE then loads this file automatically)
+# Disable: run plain `docker compose up -d` (CPU), or re-comment GPU=1.
+# Note: WHISPER_DEVICE is left to base 'auto', which resolves to CUDA once the GPU is reserved here.
 #
 # Requires an NVIDIA GPU + the NVIDIA Container Toolkit on the host. See docs/docker.md.
 services:

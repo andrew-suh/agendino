@@ -70,9 +70,9 @@ def get_transcription_service() -> TranscriptionService:
 def get_whisper_transcription_service() -> WhisperTranscriptionService:
     _config = get_config()
     return WhisperTranscriptionService(
-        model_size=_config["WHISPER_MODEL_SIZE"],
-        device=_config["WHISPER_DEVICE"],
-        compute_type=_config["WHISPER_COMPUTE_TYPE"],
+        model_size=_config.get("WHISPER_MODEL_SIZE", "small"),
+        device=_config.get("WHISPER_DEVICE", "auto"),
+        compute_type=_config.get("WHISPER_COMPUTE_TYPE", "auto"),
     )
 
 

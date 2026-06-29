@@ -105,17 +105,19 @@ You can optionally run it on an **NVIDIA GPU** by layering in `compose.gpu.yaml`
 docker compose -f compose.yaml -f compose.gpu.yaml up -d --build
 ```
 
-Or make it the default so you don't have to pass the flags — add this line to `.env`:
+Or make it the default so you don't have to pass the flags. `.env.example` ships with:
 
 ```env
-COMPOSE_FILE=compose.yaml:compose.gpu.yaml
+#GPU=1
+COMPOSE_FILE=compose.yaml${GPU:+:compose.gpu.yaml}
 ```
 
-Then plain `docker compose up -d` uses the GPU.
+Uncomment `GPU=1`, then plain `docker compose up -d` loads the GPU override automatically.
+(You don't set `WHISPER_DEVICE` — base `auto` resolves to CUDA once the GPU is reserved.)
 
 ### Disable GPU
 
-Run plain `docker compose up -d` (CPU mode), or comment out the `COMPOSE_FILE` line in `.env`.
+Run plain `docker compose up -d` (CPU mode), or re-comment the `GPU=1` line in `.env`.
 
 **Notes on `COMPOSE_FILE`:**
 - A command-line `-f` overrides `COMPOSE_FILE`, so you can still force CPU with

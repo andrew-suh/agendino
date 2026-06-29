@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 /htmlcov/
 /settings/vector_store/
+/settings/hf_cache/
 /settings/sessions.json
 /settings/auth.json
 /settings/banned_ips.json

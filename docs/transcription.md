@@ -30,6 +30,11 @@ AgenDino offers two transcription engines. You can choose between them per recor
 3. Gemini processes the audio and returns a transcript with speaker diarization, labels, and timestamps.
 4. The transcript is saved to the database.
 
+> **Model:** Gemini transcription uses `GEMINI_MODEL` by default. To run transcription on a
+> different model than the rest of the app, set `GEMINI_TRANSCRIPTION_MODEL` in `.env` — e.g. a
+> cheaper/faster Flash model for this high-volume call while `GEMINI_MODEL` stays on a stronger
+> model for summaries. It falls back to `GEMINI_MODEL` when unset.
+
 ## Using Whisper Transcription
 
 1. Select a recording.

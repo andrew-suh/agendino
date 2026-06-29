@@ -64,7 +64,9 @@ def get_local_recordings_repository() -> LocalRecordingsRepository:
 
 def get_transcription_service() -> TranscriptionService:
     _config = get_config()
-    return TranscriptionService(api_key=_config["GEMINI_API_KEY"], model=_config["GEMINI_MODEL"])
+    # Optional per-task override; falls back to the shared GEMINI_MODEL.
+    model = _config.get("GEMINI_TRANSCRIPTION_MODEL") or _config["GEMINI_MODEL"]
+    return TranscriptionService(api_key=_config["GEMINI_API_KEY"], model=model)
 
 
 def get_whisper_transcription_service() -> WhisperTranscriptionService:

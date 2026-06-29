@@ -9,6 +9,7 @@ from app import depends
 from celery_config import celery_app
 from celery_tasks import generate_tasks_task, summarize_audio_task, transcribe_audio_task
 from controllers.DashboardController import DashboardController, MIME_TYPES
+from repositories.VectorStoreRepository import VectorStoreRepository
 from models.dto.DeleteRecordingRequestDTO import DeleteRecordingRequestDTO
 from models.dto.FolderRequestDTO import CreateFolderRequestDTO, RenameFolderRequestDTO, DeleteFolderRequestDTO
 from models.dto.GenerateTasksRequestDTO import GenerateTasksRequestDTO
@@ -105,6 +106,16 @@ async def update_transcript(
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
     return dashboard_controller.update_transcript(name, body.transcript)
+
+
+@router.delete("/transcript/{name}")
+async def delete_transcript(
+    name: str,
+    dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
+    vector_store: VectorStoreRepository = Depends(depends.get_vector_store_repository),
+):
+    # vector_store is resolved only on this route, so ChromaDB isn't loaded on every request.
+    return dashboard_controller.delete_transcript(name, vector_store=vector_store)
 
 
 @router.get("/prompts")
@@ -267,6 +278,30 @@ async def get_task_status(task_id: str):
 async def cancel_task(task_id: str):
     celery_app.control.revoke(task_id, terminate=True)
     return {"ok": True, "message": f"Task {task_id} revoked"}
+
+
+@router.get("/tasks/active")
+async def active_tasks():
+    """In-flight tasks (from the Redis locks) so the UI can resume polling after a page refresh.
+
+    Declared before /tasks/{summary_id} so the path param doesn't swallow "active".
+    """
+    tasks = []
+    for entry in task_locks.list_active():
+        parts = entry["key"].split(":")  # ["lock", <type>, ...]
+        if len(parts) < 3:
+            continue
+        ttype = parts[1]
+        item = {"type": ttype, "task_id": entry["task_id"]}
+        if ttype == "transcribe":
+            item["name"] = ":".join(parts[2:])
+        elif ttype == "summarize":
+            item["name"] = parts[2]
+            item["prompt_id"] = ":".join(parts[3:]) if len(parts) > 3 else None
+        elif ttype == "generate":
+            item["summary_id"] = parts[2]
+        tasks.append(item)
+    return {"tasks": tasks}
 
 
 @router.get("/tasks/{summary_id}")

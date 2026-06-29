@@ -186,6 +186,9 @@
                     <button type="button" class="btn btn-sm btn-success d-none" id="transcript-save-btn">
                         <i class="bi bi-check-lg"></i> Save
                     </button>
+                    <button type="button" class="btn btn-sm btn-danger d-none" id="transcript-delete-btn" title="Delete transcription (also removes its summaries, tasks, and search index entries)">
+                        <i class="bi bi-trash3"></i> Delete
+                    </button>
                     <button type="button" class="btn-close btn-close-white" id="transcript-modal-close"></button>
                 </div>
             </div>
@@ -454,5 +457,5 @@
 {% block extra_js %}
 <script src="/static/hidock-device.js?v=1"></script>
     <script>window.UPLOAD_CONCURRENCY = {{ upload_concurrency | default(4) }};</script>
-    <script src="/static/dashboard.js?v=4"></script>
+    <script src="/static/dashboard.js?v=6"></script>
 {% endblock %}

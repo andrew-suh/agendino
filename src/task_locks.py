@@ -60,6 +60,20 @@ def current_holder(key: str) -> str | None:
     return _redis().get(key)
 
 
+def list_active() -> list[dict]:
+    """Return all in-flight task locks as [{"key": <lock key>, "task_id": <id>}].
+
+    Lets the frontend resume polling running tasks after a page refresh.
+    """
+    client = _redis()
+    active = []
+    for key in client.scan_iter(match="lock:*"):
+        task_id = client.get(key)
+        if task_id:
+            active.append({"key": key, "task_id": task_id})
+    return active
+
+
 def release(key: str) -> None:
     """Release the lock. Safe to call even if the key is already gone."""
     try:

@@ -186,6 +186,32 @@ class SqliteDBRepository:
         finally:
             conn.close()
 
+    def clear_transcript(self, name: str) -> bool:
+        """Remove a recording's transcript and reset its status so it can be re-transcribed."""
+        conn = self._connect()
+        try:
+            result = conn.execute(
+                "UPDATE recording SET transcript = NULL, transcription_status = 'idle' WHERE name = ?",
+                (name,),
+            )
+            conn.commit()
+            return result.rowcount > 0
+        finally:
+            conn.close()
+
+    def delete_summaries_by_recording(self, name: str) -> int:
+        """Delete all summaries for a recording (tasks cascade via FK). Returns rows deleted."""
+        conn = self._connect()
+        try:
+            result = conn.execute(
+                "DELETE FROM summary WHERE recording_id = (SELECT id FROM recording WHERE name = ?)",
+                (name,),
+            )
+            conn.commit()
+            return result.rowcount
+        finally:
+            conn.close()
+
     def get_transcript(self, name: str) -> str | None:
         conn = self._connect()
         try:

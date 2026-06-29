@@ -19,6 +19,7 @@ const DELETE_RECORDING_URL = "/api/dashboard/recording";
 const TASKS_GENERATE_URL = "/api/dashboard/tasks/generate";
 const TASKS_URL = "/api/dashboard/tasks";
 const TASK_STATUS_URL = "/api/dashboard/tasks/status";
+const TASKS_ACTIVE_URL = "/api/dashboard/tasks/active";
 const UPLOAD_URL = "/api/dashboard/upload";
 // Max uploads in flight at once. Injected by the server from WEB_CONCURRENCY (the
 // uvicorn worker count) so client concurrency matches what the server can process
@@ -52,6 +53,42 @@ async function runPool(items, concurrency, worker) {
     for (let k = 0; k < Math.min(concurrency, items.length); k++) runners.push(runner());
     await Promise.all(runners);
     return results;
+}
+
+// ─── Background task polling (shared by triggers and post-refresh resume) ───
+const _activePolls = new Set();         // task_ids with a poll loop already running
+let _activeSummarizeNames = new Set();  // recording names with an in-flight summarization
+
+// Poll a queued Celery task until it finishes. Resolves with the SUCCESS result;
+// throws on FAILURE or timeout.
+async function pollTaskStatus(taskId, { interval = 5000, maxAttempts = 720 } = {}) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const res = await fetch(`${TASK_STATUS_URL}/${encodeURIComponent(taskId)}`);
+        const data = await res.json();
+        if (data.status === "SUCCESS") return data.result;
+        if (data.status === "FAILURE") throw new Error(data.error || "Task failed");
+        await new Promise(r => setTimeout(r, interval));
+    }
+    throw new Error("Task timed out");
+}
+
+// Poll a task, registered in _activePolls so it isn't double-polled. Returns the result.
+async function pollTracked(taskId) {
+    _activePolls.add(taskId);
+    try {
+        return await pollTaskStatus(taskId);
+    } finally {
+        _activePolls.delete(taskId);
+    }
+}
+
+// Resume polling tasks still running on the worker (given /tasks/active), e.g. after a
+// page refresh. Each completion refreshes the dashboard. Deduped via _activePolls.
+function resumeActiveTasks(tasks) {
+    for (const t of tasks || []) {
+        if (!t.task_id || _activePolls.has(t.task_id)) continue;
+        pollTracked(t.task_id).then(() => loadDashboard()).catch(() => loadDashboard());
+    }
 }
 
 // ─── WebUSB device state ────────────────────────────────────────
@@ -96,12 +133,20 @@ function actionButtons(rec) {
     const btns = [];
     if (rec.on_local) {
         btns.push(`<button class="btn btn-sm btn-outline-secondary btn-play-audio" data-name="${rec.name}" title="Play audio"><i class="bi bi-play-circle"></i></button>`);
-        if (rec.has_transcript) {
+        if (rec.transcription_status === "queued" || rec.transcription_status === "running") {
+            // Transcription in flight (survives a page refresh — see resumeActiveTasks).
+            btns.push(`<button class="btn btn-sm btn-outline-primary" disabled title="Transcription in progress"><span class="spinner-border spinner-border-sm"></span> Transcribing…</button>`);
+        } else if (rec.has_transcript) {
             btns.push(`<button class="btn btn-sm btn-outline-success btn-view-transcript" data-name="${rec.name}" title="View transcript"><i class="bi bi-file-text"></i></button>`);
             if (rec.has_summary) {
                     btns.push(`<button class="btn btn-sm btn-outline-info btn-view-summary" data-name="${rec.name}" title="View summaries"><i class="bi bi-journal-text"></i></button>`);
             }
-            btns.push(`<button class="btn btn-sm btn-outline-warning btn-summarize" data-name="${rec.name}" title="Summarize"><i class="bi bi-stars"></i></button>`);
+            if (_activeSummarizeNames.has(rec.name)) {
+                // Summarization in flight (survives a page refresh — see resumeActiveTasks).
+                btns.push(`<button class="btn btn-sm btn-outline-warning" disabled title="Summarization in progress"><span class="spinner-border spinner-border-sm"></span> Summarizing…</button>`);
+            } else {
+                btns.push(`<button class="btn btn-sm btn-outline-warning btn-summarize" data-name="${rec.name}" title="Summarize"><i class="bi bi-stars"></i></button>`);
+            }
         } else {
             btns.push(`<div class="btn-group btn-group-sm transcribe-split" style="position:relative">
                 <button class="btn btn-outline-primary btn-transcribe" data-name="${rec.name}" data-engine="gemini" title="Transcribe with Gemini"><i class="bi bi-mic"></i></button>
@@ -437,12 +482,18 @@ async function loadDashboard() {
     hide(emptyEl);
 
     try {
-        const [res, deviceData] = await Promise.all([
+        const [res, deviceData, activeTasks] = await Promise.all([
             fetch(API_URL),
             probeWebUSBDevice(),
+            fetch(TASKS_ACTIVE_URL).then(r => r.json()).then(d => d.tasks || []).catch(() => []),
         ]);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         let data = await res.json();
+
+        // In-flight summarizations (no persisted status column) → row indicator + resume.
+        _activeSummarizeNames = new Set(
+            activeTasks.filter(t => t.type === "summarize" && t.name).map(t => t.name)
+        );
 
         // Merge device data if available
         if (deviceData) {
@@ -489,6 +540,9 @@ async function loadDashboard() {
         // Render table (filtered by current folder)
         hide(loading);
         renderFilteredTable();
+
+        // Resume polling any task still running on the worker (survives page refresh).
+        resumeActiveTasks(activeTasks);
     } catch (err) {
         hide(loading);
         errorEl.textContent = `Failed to load recordings: ${err.message}`;
@@ -518,7 +572,7 @@ function hideSyncOverlay() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-    loadDashboard();
+    loadDashboard();  // also resumes polling of any task still running after a refresh
 
     // ─── Folder tree click handler ──────────────────────────────
     document.addEventListener("click", (e) => {
@@ -1173,6 +1227,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const transcriptAudioPlayer = $("#transcript-audio-player");
     const transcriptAudio = $("#transcript-audio");
     const modalError = $("#transcript-error");
+    const transcriptDeleteBtn = $("#transcript-delete-btn");
     let currentTranscriptName = null;
 
     function extractSpeakerNames(transcript) {
@@ -1246,6 +1301,7 @@ document.addEventListener("DOMContentLoaded", () => {
          hide(modalContent);
          hide(transcriptEditor);
          hide(transcriptSaveBtn);
+         hide(transcriptDeleteBtn);
          hide(transcriptSpeakerEditor);
          hide(transcriptSaveFeedback);
          hide(transcriptAudioPlayer);
@@ -1264,6 +1320,7 @@ document.addEventListener("DOMContentLoaded", () => {
          modalContent.innerHTML = formatTranscript(transcript || "");
          transcriptEditor.value = transcript || "";
          show(modalContent);
+         show(transcriptDeleteBtn);
          show(transcriptAudioPlayer);
          if (currentTranscriptName && transcriptAudio) {
              transcriptAudio.src = `${AUDIO_URL}/${encodeURIComponent(currentTranscriptName)}`;
@@ -1309,19 +1366,6 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".transcribe-engine-menu").forEach(m => m.classList.add("d-none"));
     });
 
-    // Poll a queued Celery task until it finishes.
-    // Resolves with the task's SUCCESS result; throws on FAILURE or timeout.
-    async function pollTaskStatus(taskId, { interval = 5000, maxAttempts = 720 } = {}) {
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            const res = await fetch(`${TASK_STATUS_URL}/${encodeURIComponent(taskId)}`);
-            const data = await res.json();
-            if (data.status === "SUCCESS") return data.result;
-            if (data.status === "FAILURE") throw new Error(data.error || "Task failed");
-            await new Promise(r => setTimeout(r, interval));
-        }
-        throw new Error("Task timed out");
-    }
-
     // Start transcription helper
     async function startTranscription(name, engine, triggerBtn) {
         const engineLabel = engine === "whisper" ? "Whisper (local)" : "Gemini AI";
@@ -1345,7 +1389,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (data.status === "queued" || data.status === "already_running") {
                 // Queued on a Celery worker — poll until it finishes.
-                const result = await pollTaskStatus(data.task_id);
+                const result = await pollTracked(data.task_id);
                 hide(modalLoading);
                 showTranscriptPreview(result.transcript);
                 await loadDashboard();
@@ -1502,6 +1546,38 @@ document.addEventListener("DOMContentLoaded", () => {
             } finally {
                 transcriptSaveBtn.disabled = false;
                 transcriptSaveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Save';
+            }
+        });
+    }
+
+    if (transcriptDeleteBtn) {
+        transcriptDeleteBtn.addEventListener("click", async (e) => {
+            e.preventDefault();
+            if (!currentTranscriptName) return;
+            if (!confirm("Delete this transcription? This also removes its summaries, tasks, and search-index entries. The recording/audio is kept.")) return;
+
+            transcriptDeleteBtn.disabled = true;
+            transcriptDeleteBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span>';
+            hide(transcriptSaveFeedback);
+
+            try {
+                const res = await fetch(`${TRANSCRIPT_URL}/${encodeURIComponent(currentTranscriptName)}`, { method: "DELETE" });
+                const data = await res.json();
+                if (data.ok) {
+                    closeTranscriptModal();
+                    await loadDashboard();
+                } else {
+                    transcriptSaveFeedback.className = "small mt-2 text-danger";
+                    transcriptSaveFeedback.textContent = data.error || "Delete failed";
+                    show(transcriptSaveFeedback);
+                }
+            } catch (err) {
+                transcriptSaveFeedback.className = "small mt-2 text-danger";
+                transcriptSaveFeedback.textContent = `Delete failed: ${err.message}`;
+                show(transcriptSaveFeedback);
+            } finally {
+                transcriptDeleteBtn.disabled = false;
+                transcriptDeleteBtn.innerHTML = '<i class="bi bi-trash3"></i> Delete';
             }
         });
     }
@@ -1826,7 +1902,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             // Queued on a Celery worker — wait for it to finish before refreshing.
             if (data.ok && data.task_id) {
-                await pollTaskStatus(data.task_id);
+                await pollTracked(data.task_id);
             }
 
             hide(summaryLoading);
@@ -2221,7 +2297,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (data.ok && data.task_id) {
                 // Queued on a Celery worker — poll, then load the generated tasks.
-                await pollTaskStatus(data.task_id);
+                await pollTracked(data.task_id);
                 await loadTasks(summaryId);
             } else if (data.ok && data.tasks && data.tasks.length > 0) {
                 hide(tasksLoading);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 
@@ -15,6 +16,8 @@ from services.SummarizationService import SummarizationService
 from services.TaskGenerationService import TaskGenerationService
 from services.TranscriptionService import TranscriptionService
 from services.WhisperTranscriptionService import WhisperTranscriptionService
+
+logger = logging.getLogger(__name__)
 
 MIME_TYPES = {
     "hda": "audio/mpeg",
@@ -396,6 +399,34 @@ class DashboardController:
         if not updated:
             return {"ok": False, "error": f"Recording '{bare_name}' not found"}
         return {"ok": True, "name": bare_name, "transcript": transcript}
+
+    def delete_transcript(self, name: str, vector_store=None) -> dict:
+        """Delete a recording's transcript plus everything derived from it (summaries, tasks, and
+        their RAG embeddings), and reset its status so it can be re-transcribed. Keeps the recording."""
+        bare_name = self._bare_name(name)
+        db_rec = self._sqlite_db_repository.get_recording_by_name(bare_name)
+        if not db_rec or not db_rec.transcript:
+            return {"ok": False, "error": "No transcript to delete"}
+        if db_rec.transcription_status in ("queued", "running"):
+            return {"ok": False, "error": "Transcription in progress"}
+
+        # Remove derived summaries' embeddings from the vector store (best-effort).
+        summaries = self._sqlite_db_repository.get_summaries(bare_name)
+        if vector_store is not None:
+            for s in summaries:
+                try:
+                    vector_store.delete_summary(s.id)
+                except Exception as e:
+                    logger.warning("Failed to delete summary %s from vector store: %s", s.id, e)
+
+        deleted = self._sqlite_db_repository.delete_summaries_by_recording(bare_name)  # tasks cascade
+        self._sqlite_db_repository.clear_transcript(bare_name)
+        return {
+            "ok": True,
+            "name": bare_name,
+            "message": f"Deleted transcript for '{bare_name}'",
+            "deleted_summaries": deleted,
+        }
 
     def list_system_prompts(self) -> dict:
         prompts = self._system_prompts_repository.get_all()

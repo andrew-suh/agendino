@@ -9,3 +9,7 @@ __pycache__/
 /settings/sessions.json
 /settings/auth.json
 /settings/banned_ips.json
+
+# Never commit TLS material; generate per host
+certs/*
+!certs/.gitkeep

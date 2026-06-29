@@ -78,6 +78,76 @@ To stop:
 docker compose down
 ```
 
+## GPU acceleration (optional)
+
+Local Whisper transcription runs on the **celery** worker. By default it runs on **CPU**.
+You can optionally run it on an **NVIDIA GPU** by layering in `compose.gpu.yaml`.
+
+> GPU support targets **Linux** hosts. The container image is Linux-based regardless of where
+> Docker runs.
+
+### Host prerequisites
+
+1. NVIDIA driver installed — `nvidia-smi` works on the host.
+2. Install the **NVIDIA Container Toolkit** and configure the Docker runtime:
+   ```bash
+   sudo nvidia-ctk runtime configure --runtime=docker
+   sudo systemctl restart docker
+   ```
+3. Verify Docker can see the GPU:
+   ```bash
+   docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+   ```
+
+### Enable GPU
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml up -d --build
+```
+
+Or make it the default so you don't have to pass the flags — add this line to `.env`:
+
+```env
+COMPOSE_FILE=compose.yaml:compose.gpu.yaml
+```
+
+Then plain `docker compose up -d` uses the GPU.
+
+### Disable GPU
+
+Run plain `docker compose up -d` (CPU mode), or comment out the `COMPOSE_FILE` line in `.env`.
+
+**Notes on `COMPOSE_FILE`:**
+- A command-line `-f` overrides `COMPOSE_FILE`, so you can still force CPU with
+  `docker compose -f compose.yaml up -d` even when the `.env` default is GPU.
+- It is "sticky": once set, **every** `docker compose` command uses both files. On a host
+  without a working GPU, plain `docker compose up` then fails on the GPU reservation — use the
+  base file only on non-GPU hosts.
+- The path separator is `:` on Linux (`;` on Windows).
+
+`compose.gpu.yaml` sets `WHISPER_COMPUTE_TYPE=float16` and `WHISPER_MODEL_SIZE=large-v3`,
+which suit a modern GPU. For older cards, adjust these — see
+[Transcription → GPU compatibility](transcription.md).
+
+## Concurrency tuning (CPU vs GPU)
+
+`CELERY_CONCURRENCY` controls how many transcription/summarization jobs run in **parallel**
+on the worker. Set it in `.env` or the `celery` service `environment:` (default `1`). Jobs for
+the *same* recording are deduplicated by a lock, so this only speeds up processing of
+*different* recordings at once.
+
+> Uploads scale separately via `WEB_CONCURRENCY` (web workers) — a different knob with a
+> different bottleneck.
+
+**To change it safely:** raise `CELERY_CONCURRENCY` by 1, recreate the worker
+(`docker compose up -d` — no rebuild needed for an env change), start 2+ transcriptions on
+different files, and watch the limiting resource before going higher.
+
+| Mode | Limited by | Recommended | Why |
+|------|-----------|-------------|-----|
+| **CPU** | Cores / RAM | **1–2** | faster-whisper already multithreads internally; stacking workers oversubscribes the CPU and can be *slower*. Each worker also loads its own model into RAM. |
+| **GPU** | VRAM | **1–2** (start at 1) | Each worker loads its own model copy into VRAM and they share one GPU's compute. Estimate `floor(free_VRAM / model_VRAM)`. On a 10 GB card with `large-v3` float16 (~3 GB), 1–2 is safe; an OOM crashes the task. |
+
 ---
 
 **Next:** explore the features - start with [Recording Management](recording-management.md) or browse the full [Documentation Index](index.md).

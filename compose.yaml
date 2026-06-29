@@ -4,34 +4,40 @@ services:
     expose:
       - 8000
     volumes:
-      - "{local-dir-here}:/app/local_recordings"
-      - "{local-dir-here}:/app/settings"
+      - "./local_recordings:/app/local_recordings"
+      - "./settings:/app/settings"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.fastapi.rule=Host(`{internal-ip-here}`)"
       - "traefik.http.routers.fastapi.tls=true"
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
+      # One knob drives uvicorn workers AND the dashboard's parallel upload limit.
+      # Override via your shell or .env.
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-4}
     depends_on:
       - redis
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1 # alternatively, use `count: all` for all GPUs
-    #           capabilities: [ gpu ]
+    # $$ escapes Compose interpolation so the value is read from the container env at runtime.
+    command: sh -c "uvicorn main:app --host 0.0.0.0 --port 8000 --workers $${WEB_CONCURRENCY:-4}"
 
   celery:
     build: .
     working_dir: /app/src
     volumes:
-      - "{local-dir-here}:/app/local_recordings"
-      - "{local-dir-here}:/app/settings"
+      - "./local_recordings:/app/local_recordings"
+      - "./settings:/app/settings"
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
-    command: celery -A celery_tasks worker --loglevel=info --concurrency=4
+      # Whisper auto-selects the GPU when one is reserved (see compose.gpu.yaml), else CPU.
+      - WHISPER_DEVICE=auto
+      - WHISPER_COMPUTE_TYPE=auto
+      # Persist downloaded Whisper models on the mounted settings volume.
+      - HF_HOME=/app/settings/hf_cache
+      # Parallel heavy jobs (transcription/summarization). Tune per CPU/GPU — see docs/docker.md.
+      # Set CELERY_CONCURRENCY in your shell or .env to override the default of 1.
+      - CELERY_CONCURRENCY=${CELERY_CONCURRENCY:-1}
+    # $$ escapes Compose interpolation so the value is read from the container env at runtime.
+    command: sh -c "celery -A celery_tasks worker --loglevel=info --concurrency=$${CELERY_CONCURRENCY:-1}"
     depends_on:
       - redis
 
@@ -49,7 +55,7 @@ services:
       - "443:443"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "{local-dir-here}:/certs:ro"
+      - "./certs:/certs:ro"
       - "./dynamic:/etc/traefik/dynamic:ro"
     labels:
       - "traefik.enable=true"

@@ -374,9 +374,9 @@
                 <div id="upload-form-section">
                     <div class="mb-3">
                         <label for="upload-file-input" class="form-label">Audio file</label>
-                        <input class="form-control" type="file" id="upload-file-input"
+                        <input class="form-control" type="file" id="upload-file-input" multiple
                                accept=".hda,.mp3,.wav,.m4a,.ogg,.webm,.flac,.aac,.wma">
-                        <div class="form-text">Supported: HDA, MP3, WAV, M4A, OGG, WebM, FLAC, AAC, WMA</div>
+                        <div class="form-text">Supported: HDA, MP3, WAV, M4A, OGG, WebM, FLAC, AAC, WMA. Select multiple files to upload in parallel.</div>
                     </div>
                     <div class="mb-3">
                         <label for="upload-label-input" class="form-label">Label <small class="text-muted">(optional)</small></label>
@@ -453,5 +453,6 @@
 
 {% block extra_js %}
 <script src="/static/hidock-device.js?v=1"></script>
-    <script src="/static/dashboard.js?v=3"></script>
+    <script>window.UPLOAD_CONCURRENCY = {{ upload_concurrency | default(4) }};</script>
+    <script src="/static/dashboard.js?v=4"></script>
 {% endblock %}

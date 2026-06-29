@@ -20,6 +20,10 @@ const TASKS_GENERATE_URL = "/api/dashboard/tasks/generate";
 const TASKS_URL = "/api/dashboard/tasks";
 const TASK_STATUS_URL = "/api/dashboard/tasks/status";
 const UPLOAD_URL = "/api/dashboard/upload";
+// Max uploads in flight at once. Injected by the server from WEB_CONCURRENCY (the
+// uvicorn worker count) so client concurrency matches what the server can process
+// in parallel; falls back to 4 if the page didn't provide it.
+const UPLOAD_CONCURRENCY = Math.max(1, Number(window.UPLOAD_CONCURRENCY) || 4);
 const RECORDING_UPDATE_URL = "/api/dashboard/recording";
 const FOLDERS_URL = "/api/dashboard/folders";
 const MOVE_RECORDING_URL = "/api/dashboard/recording";
@@ -27,6 +31,28 @@ const BULK_MOVE_URL = "/api/dashboard/recordings/move";
 
 const show = (el) => el?.classList.remove("d-none");
 const hide = (el) => el?.classList.add("d-none");
+
+// Run `worker(item, index)` over `items` with at most `concurrency` in flight.
+// Never rejects: each result is { status: "fulfilled", value } or
+// { status: "rejected", reason }, indexed to match `items`.
+async function runPool(items, concurrency, worker) {
+    const results = new Array(items.length);
+    let next = 0;
+    async function runner() {
+        while (next < items.length) {
+            const i = next++;
+            try {
+                results[i] = { status: "fulfilled", value: await worker(items[i], i) };
+            } catch (reason) {
+                results[i] = { status: "rejected", reason };
+            }
+        }
+    }
+    const runners = [];
+    for (let k = 0; k < Math.min(concurrency, items.length); k++) runners.push(runner());
+    await Promise.all(runners);
+    return results;
+}
 
 // ─── WebUSB device state ────────────────────────────────────────
 let _cachedDeviceData = null; // { info, files, storage } from last device probe
@@ -873,15 +899,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 const synced = [];
                 const skipped = [];
                 const errors = [];
-                for (const f of files) {
-                    try {
-                        if (existingNames.has(HiDockDevice.bareName(f.name))) {
-                            skipped.push(f.name);
-                            continue;
-                        }
 
-                        const data = await hidock.downloadFile(f.name, f.length);
-                        const blob = new Blob([data], { type: "audio/mpeg" });
+                // Upload a downloaded blob; classifies the result. Never rejects.
+                async function uploadOne(f, blob) {
+                    try {
                         const form = new FormData();
                         form.append("file", blob, f.name);
                         form.append("label", HiDockDevice.bareName(f.name));
@@ -894,10 +915,37 @@ document.addEventListener("DOMContentLoaded", () => {
                         } else {
                             errors.push(`${f.name}: ${result.error}`);
                         }
+                    } catch (uploadErr) {
+                        errors.push(`${f.name}: ${uploadErr.message}`);
+                    }
+                }
+
+                // Downloads stay sequential (one USB device, one bulk transfer at a
+                // time), but uploads overlap each other and the next download. We cap
+                // in-flight uploads so memory and the server stay bounded.
+                const inFlight = new Set();
+                for (const f of files) {
+                    try {
+                        if (existingNames.has(HiDockDevice.bareName(f.name))) {
+                            skipped.push(f.name);
+                            continue;
+                        }
+
+                        const data = await hidock.downloadFile(f.name, f.length);
+                        const blob = new Blob([data], { type: "audio/mpeg" });
+
+                        while (inFlight.size >= UPLOAD_CONCURRENCY) {
+                            await Promise.race(inFlight);
+                        }
+                        const task = uploadOne(f, blob).finally(() => inFlight.delete(task));
+                        inFlight.add(task);
                     } catch (fileErr) {
                         errors.push(`${f.name}: ${fileErr.message}`);
                     }
                 }
+
+                // Let the remaining uploads finish before closing/reporting.
+                await Promise.all(inFlight);
 
                 await hidock.close();
 
@@ -1017,42 +1065,48 @@ document.addEventListener("DOMContentLoaded", () => {
         uploadSubmitBtn.addEventListener("click", async () => {
             if (!uploadFileInput.files || uploadFileInput.files.length === 0) return;
 
-            const file = uploadFileInput.files[0];
-            const label = uploadLabelInput ? uploadLabelInput.value.trim() : "";
+            const files = Array.from(uploadFileInput.files);
+            // A single shared label only makes sense for one file; with multiple,
+            // let each recording default to its own name (backend does this on empty label).
+            const label = (files.length === 1 && uploadLabelInput) ? uploadLabelInput.value.trim() : "";
 
             hide(uploadFormSection);
             show(uploadProgress);
             hide(uploadResult);
 
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("label", label);
-
-            try {
+            const results = await runPool(files, UPLOAD_CONCURRENCY, async (file) => {
+                const formData = new FormData();
+                formData.append("file", file);
+                formData.append("label", label);
                 const res = await fetch(UPLOAD_URL, { method: "POST", body: formData });
                 const data = await res.json();
+                if (!data.ok) throw new Error(data.error || "Upload failed");
+                return data;
+            });
 
-                hide(uploadProgress);
-                if (data.ok) {
-                    uploadResult.className = "alert alert-success mt-3";
-                    uploadResult.innerHTML = `<i class="bi bi-check-circle me-1"></i>${data.message}`;
-                    show(uploadResult);
-                    setTimeout(async () => {
-                        closeUploadModal();
-                        await loadDashboard();
-                    }, 1200);
-                } else {
-                    uploadResult.className = "alert alert-danger mt-3";
-                    uploadResult.innerHTML = `<i class="bi bi-exclamation-triangle me-1"></i>${data.error}`;
-                    show(uploadResult);
-                    show(uploadFormSection);
-                }
-            } catch (err) {
-                hide(uploadProgress);
-                uploadResult.className = "alert alert-danger mt-3";
-                uploadResult.innerHTML = `<i class="bi bi-exclamation-triangle me-1"></i>Upload failed: ${err.message}`;
+            const succeeded = [];
+            const failed = [];
+            results.forEach((r, i) => {
+                if (r.status === "fulfilled") succeeded.push(files[i].name);
+                else failed.push(`${files[i].name}: ${r.reason.message}`);
+            });
+
+            hide(uploadProgress);
+            if (failed.length === 0) {
+                uploadResult.className = "alert alert-success mt-3";
+                uploadResult.innerHTML = `<i class="bi bi-check-circle me-1"></i>Uploaded ${succeeded.length} file(s) successfully`;
+                show(uploadResult);
+                setTimeout(async () => {
+                    closeUploadModal();
+                    await loadDashboard();
+                }, 1200);
+            } else {
+                uploadResult.className = succeeded.length > 0 ? "alert alert-warning mt-3" : "alert alert-danger mt-3";
+                const okMsg = succeeded.length > 0 ? `Uploaded ${succeeded.length} file(s). ` : "";
+                uploadResult.innerHTML = `<i class="bi bi-exclamation-triangle me-1"></i>${okMsg}Failed ${failed.length}:<ul class="mb-0 mt-1">${failed.map(e => `<li>${e}</li>`).join("")}</ul>`;
                 show(uploadResult);
                 show(uploadFormSection);
+                if (succeeded.length > 0) await loadDashboard();
             }
         });
     }

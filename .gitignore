@@ -2,6 +2,8 @@
 .env
 .idea
 *.db
+__pycache__/
+*.pyc
 /htmlcov/
 /settings/vector_store/
 /settings/sessions.json

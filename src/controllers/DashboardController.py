@@ -75,10 +75,20 @@ class DashboardController:
         return None
 
     def home(self, request: Request):
+        # Mirror the uvicorn worker count to the frontend so parallel uploads match
+        # the number of requests the server can actually process at once.
+        try:
+            upload_concurrency = max(1, int(os.getenv("WEB_CONCURRENCY", "1")))
+        except ValueError:
+            upload_concurrency = 1
         return self._templates.TemplateResponse(
             request=request,
             name="dashboard/home.html",
-            context={"active_page": "dashboard", "auth_enabled": self._auth_enabled},
+            context={
+                "active_page": "dashboard",
+                "auth_enabled": self._auth_enabled,
+                "upload_concurrency": upload_concurrency,
+            },
         )
 
     def list_local_recordings(self):

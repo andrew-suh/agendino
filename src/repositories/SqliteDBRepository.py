@@ -18,9 +18,15 @@ class SqliteDBRepository:
         self._ensure_recording_columns()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
+        # timeout: wait up to 30s for a write lock instead of failing immediately,
+        # so concurrent inserts (e.g. parallel uploads) don't raise "database is locked".
+        conn = sqlite3.connect(self._db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # WAL lets readers and a writer proceed concurrently, which is what makes
+        # parallel uploads safe against this single SQLite file.
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
         return conn
 
     def _initialize_db(self, init_sql_script: str) -> None:

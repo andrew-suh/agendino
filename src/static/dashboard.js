@@ -1902,6 +1902,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
             // Queued on a Celery worker — wait for it to finish before refreshing.
             if (data.ok && data.task_id) {
+                // Flip the row's button to "Summarizing…" immediately, without
+                // waiting for the next loadDashboard() to repopulate the set.
+                _activeSummarizeNames.add(currentSummarizeName);
+                renderFilteredTable();
                 await pollTracked(data.task_id);
             }
 
@@ -1919,11 +1923,15 @@ document.addEventListener("DOMContentLoaded", () => {
             } else {
                 summaryError.textContent = data.error;
                 show(summaryError);
+                _activeSummarizeNames.delete(currentSummarizeName);
+                renderFilteredTable();
             }
         } catch (err) {
             hide(summaryLoading);
             summaryError.textContent = `Summarization failed: ${err.message}`;
             show(summaryError);
+            _activeSummarizeNames.delete(currentSummarizeName);
+            renderFilteredTable();
         }
     });
 

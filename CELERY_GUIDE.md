@@ -369,9 +369,9 @@ celery -A celery_tasks worker --loglevel=info
 ### Docker Compose
 
 `compose.yaml` already wires this up: a `redis` service, a `celery` worker service
-(`working_dir: /app/src`, `command: celery -A celery_tasks worker --concurrency=4`),
-and `CELERY_BROKER_URL` + `depends_on: redis` on the `agendino` API service. Just
-`docker compose up --build`.
+(`working_dir: /app/src`; worker concurrency set via the `CELERY_CONCURRENCY` env var,
+default `1` — see [Docker → Concurrency tuning](docs/docker.md)), and `CELERY_BROKER_URL`
++ `depends_on: redis` on the `agendino` API service. Just `docker compose up --build`.
 
 > Important: the `celery` and `agendino` services must mount the **same** host
 > directories for `/app/local_recordings` and `/app/settings` (the SQLite DB lives

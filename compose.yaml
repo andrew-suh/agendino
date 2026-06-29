@@ -8,8 +8,12 @@ services:
       - "./settings:/app/settings"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.fastapi.rule=Host(`{internal-ip-here}`)"
+      - "traefik.http.routers.fastapi.rule=Host(`${INTERNAL_IP:-127.0.0.1}`)"
       - "traefik.http.routers.fastapi.tls=true"
+    # App config (GEMINI_API_KEY, DATABASE_NAME, NOTION_*, WHISPER_*, etc.) is injected
+    # at runtime from .env — it is intentionally NOT baked into the image (see .dockerignore).
+    env_file:
+      - .env
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       # One knob drives uvicorn workers AND the dashboard's parallel upload limit.
@@ -26,6 +30,9 @@ services:
     volumes:
       - "./local_recordings:/app/local_recordings"
       - "./settings:/app/settings"
+    # Same .env config the web service uses (injected at runtime, not baked into the image).
+    env_file:
+      - .env
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       # Whisper auto-selects the GPU when one is reserved (see compose.gpu.yaml), else CPU.
@@ -59,7 +66,7 @@ services:
       - "./dynamic:/etc/traefik/dynamic:ro"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.dashboard.rule=Host(`{internal-ip-here}`) && (PathPrefix(`/traefik/api`) || PathPrefix(`/traefik/dashboard`))"
+      - "traefik.http.routers.dashboard.rule=Host(`${INTERNAL_IP:-127.0.0.1}`) && (PathPrefix(`/traefik/api`) || PathPrefix(`/traefik/dashboard`))"
       - "traefik.http.routers.dashboard.tls=true"
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.service=api@internal"

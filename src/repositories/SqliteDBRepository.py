@@ -396,6 +396,23 @@ class SqliteDBRepository:
         finally:
             conn.close()
 
+    def get_summary_counts_map(self) -> dict[str, int]:
+        """Return {recording_name: number_of_summaries} for all recordings in one query.
+
+        Used by the dashboard to avoid an N+1 query (one get_summaries() per row).
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute("""
+                SELECT r.name AS recording_name, COUNT(s.id) AS summary_count
+                FROM recording r
+                LEFT JOIN summary s ON s.recording_id = r.id
+                GROUP BY r.id
+                """).fetchall()
+            return {row["recording_name"]: row["summary_count"] for row in rows}
+        finally:
+            conn.close()
+
     def delete_recording(self, name: str) -> bool:
         conn = self._connect()
         try:

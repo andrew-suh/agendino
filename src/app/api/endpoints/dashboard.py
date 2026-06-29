@@ -26,7 +26,7 @@ router = APIRouter()
 
 
 @router.get("/recordings")
-async def recordings_status(
+def recordings_status(
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
     return dashboard_controller.get_recordings_status()
@@ -57,7 +57,7 @@ async def get_audio(
 
 
 @router.post("/transcribe/{name}")
-async def transcribe_recording(
+def transcribe_recording(
     name: str,
     body: TranscribeRequestDTO = TranscribeRequestDTO(),
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -92,7 +92,7 @@ async def transcribe_recording(
 
 
 @router.get("/transcript/{name}")
-async def get_transcript(
+def get_transcript(
     name: str,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
@@ -100,7 +100,7 @@ async def get_transcript(
 
 
 @router.patch("/transcript/{name}")
-async def update_transcript(
+def update_transcript(
     name: str,
     body: UpdateTranscriptRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -109,7 +109,7 @@ async def update_transcript(
 
 
 @router.delete("/transcript/{name}")
-async def delete_transcript(
+def delete_transcript(
     name: str,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
     vector_store: VectorStoreRepository = Depends(depends.get_vector_store_repository),
@@ -119,14 +119,14 @@ async def delete_transcript(
 
 
 @router.get("/prompts")
-async def list_system_prompts(
+def list_system_prompts(
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
     return dashboard_controller.list_system_prompts()
 
 
 @router.post("/summarize/{name}")
-async def summarize_recording(
+def summarize_recording(
     name: str,
     body: SummarizeRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -153,7 +153,7 @@ async def summarize_recording(
 
 
 @router.get("/summaries/{name}")
-async def get_summaries(
+def get_summaries(
     name: str,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
@@ -162,7 +162,7 @@ async def get_summaries(
 
 # Legacy alias: keep old route name but return all summaries.
 @router.get("/summary/{name}")
-async def get_summary_legacy(
+def get_summary_legacy(
     name: str,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
@@ -170,14 +170,14 @@ async def get_summary_legacy(
 
 
 @router.get("/share/destinations")
-async def share_destinations(
+def share_destinations(
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
     return dashboard_controller.get_publish_destinations()
 
 
 @router.post("/share/summary/{summary_id}")
-async def publish_summary(
+def publish_summary(
     summary_id: int,
     body: PublishRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -187,7 +187,7 @@ async def publish_summary(
 
 # Legacy alias: publish latest summary for this recording.
 @router.post("/share/{name}")
-async def publish_recording(
+def publish_recording(
     name: str,
     body: PublishRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -196,7 +196,7 @@ async def publish_recording(
 
 
 @router.patch("/summary/{summary_id}")
-async def update_summary(
+def update_summary(
     summary_id: int,
     body: UpdateSummaryRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -205,7 +205,7 @@ async def update_summary(
 
 
 @router.patch("/recording/{name}")
-async def update_recording(
+def update_recording(
     name: str,
     body: UpdateRecordingRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -214,7 +214,7 @@ async def update_recording(
 
 
 @router.delete("/recording/{name}")
-async def delete_recording(
+def delete_recording(
     name: str,
     body: DeleteRecordingRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -230,7 +230,7 @@ async def delete_recording(
 
 
 @router.post("/tasks/generate")
-async def generate_tasks(
+def generate_tasks(
     body: GenerateTasksRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
@@ -260,7 +260,7 @@ async def generate_tasks(
 
 
 @router.get("/tasks/status/{task_id}")
-async def get_task_status(task_id: str):
+def get_task_status(task_id: str):
     result = AsyncResult(task_id, app=celery_app)
     state = result.state
 
@@ -275,13 +275,13 @@ async def get_task_status(task_id: str):
 
 
 @router.delete("/tasks/status/{task_id}")
-async def cancel_task(task_id: str):
+def cancel_task(task_id: str):
     celery_app.control.revoke(task_id, terminate=True)
     return {"ok": True, "message": f"Task {task_id} revoked"}
 
 
 @router.get("/tasks/active")
-async def active_tasks():
+def active_tasks():
     """In-flight tasks (from the Redis locks) so the UI can resume polling after a page refresh.
 
     Declared before /tasks/{summary_id} so the path param doesn't swallow "active".
@@ -305,7 +305,7 @@ async def active_tasks():
 
 
 @router.get("/tasks/{summary_id}")
-async def get_tasks(
+def get_tasks(
     summary_id: int,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
@@ -313,7 +313,7 @@ async def get_tasks(
 
 
 @router.patch("/tasks/{task_id}")
-async def update_task(
+def update_task(
     task_id: int,
     body: UpdateTaskRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -324,7 +324,7 @@ async def update_task(
 
 
 @router.delete("/tasks/{task_id}")
-async def delete_task(
+def delete_task(
     task_id: int,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
@@ -335,14 +335,14 @@ async def delete_task(
 
 
 @router.get("/folders")
-async def get_folders(
+def get_folders(
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
     return dashboard_controller.get_folders()
 
 
 @router.post("/folders")
-async def create_folder(
+def create_folder(
     body: CreateFolderRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
@@ -350,7 +350,7 @@ async def create_folder(
 
 
 @router.patch("/folders/rename")
-async def rename_folder(
+def rename_folder(
     body: RenameFolderRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
@@ -358,7 +358,7 @@ async def rename_folder(
 
 
 @router.delete("/folders")
-async def delete_folder(
+def delete_folder(
     body: DeleteFolderRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):
@@ -366,7 +366,7 @@ async def delete_folder(
 
 
 @router.patch("/recording/{name}/move")
-async def move_recording(
+def move_recording(
     name: str,
     body: MoveRecordingRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
@@ -375,7 +375,7 @@ async def move_recording(
 
 
 @router.patch("/recordings/move")
-async def bulk_move_recordings(
+def bulk_move_recordings(
     body: BulkMoveRecordingsRequestDTO,
     dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
 ):

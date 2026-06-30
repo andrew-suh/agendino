@@ -27,17 +27,11 @@ class GeminiEmbedder:
 
 
 class LocalEmbedder:
-    """Embed text locally with a sentence-transformers model (offline, no API).
-
-    sentence-transformers is imported lazily so the dependency is only required when
-    EMBEDDING_PROVIDER=local. The model is loaded on first use (mirrors the lazy
-    WhisperTranscriptionService pattern).
-    """
+    """Embed text locally with sentence-transformers (offline). Imported + loaded lazily."""
 
     def __init__(self, model_name: str, device: str = "auto"):
         self._model_name = model_name
-        # SentenceTransformer does not accept the literal "auto" (unlike faster-whisper);
-        # None lets it auto-detect CUDA/MPS/CPU.
+        # SentenceTransformer wants None (not "auto") to auto-detect the device.
         self._device = None if device in (None, "", "auto") else device
         self._model = None  # lazy-loaded
 
@@ -89,11 +83,7 @@ class LocalEmbedder:
 
 
 class OllamaEmbedder:
-    """Embed text via a (local) Ollama server's OpenAI-compatible API.
-
-    One shared model lives in the Ollama container, so every web worker calls the same instance
-    instead of each loading its own copy. Mirrors OllamaRAGService.
-    """
+    """Embed via a shared Ollama server (OpenAI-compatible API) — one model for all web workers."""
 
     def __init__(self, base_url: str, model: str):
         self._base_url = base_url.rstrip("/")
@@ -111,6 +101,5 @@ class OllamaEmbedder:
         )
         response.raise_for_status()
         data = response.json().get("data", [])
-        # Sort by index defensively so embeddings line up with the input order.
-        data.sort(key=lambda d: d.get("index", 0))
+        data.sort(key=lambda d: d.get("index", 0))  # keep input order
         return [d["embedding"] for d in data]

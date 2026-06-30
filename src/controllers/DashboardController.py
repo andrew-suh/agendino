@@ -484,8 +484,7 @@ class DashboardController:
         }
 
     def _index_summary(self, summary) -> None:
-        """Best-effort: embed a new summary into the vector store so /ask + mind map see it without a
-        manual "Load summaries". Never fail summarization if the embedder/Ollama is unreachable."""
+        """Best-effort embed of a new summary so /ask + mind map see it without a manual reload."""
         if self._vector_store_repository is None or not (summary.summary or "").strip():
             return
         try:

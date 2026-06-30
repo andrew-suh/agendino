@@ -165,11 +165,8 @@ def get_proactor_controller() -> ProactorController:
     )
 
 
-# Cache only the embedder as a process-level singleton: a local embedder loads a multi-hundred-MB
-# model that must not reload per request. The VectorStoreRepository is intentionally NOT cached — a
-# cached ChromaDB collection handle goes stale across a collection delete/recreate (the mismatch
-# reset), which other workers then query → "hnsw segment reader: Nothing found on disk". Building it
-# per request is cheap (ChromaDB caches the PersistentClient by path) and yields a fresh handle.
+# Cache the embedder (a local model must not reload per request); do NOT cache the vector store —
+# a cached collection handle goes stale across the mismatch reset's delete/recreate.
 _embedder = None
 
 
@@ -205,12 +202,7 @@ def get_vector_store_repository() -> VectorStoreRepository:
 
 
 def get_rag_service():
-    """Return the configured RAG generation service.
-
-    Provider values: `ollama` (Docker) and `local` (non-Docker host Ollama) are synonyms — both use
-    Ollama via OLLAMA_BASE_URL; `gemini` is cloud. When RAG_PROVIDER is unset it follows the embedding
-    provider: Ollama generation when EMBEDDING_PROVIDER=ollama, otherwise Gemini.
-    """
+    """RAG generation service. `ollama`/`local` are synonyms (Ollama); unset follows EMBEDDING_PROVIDER."""
     _config = get_config()
     embedding_provider = _config.get("EMBEDDING_PROVIDER", "gemini").lower()
     default_provider = "ollama" if embedding_provider == "ollama" else "gemini"

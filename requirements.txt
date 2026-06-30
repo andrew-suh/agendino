@@ -10,9 +10,7 @@ recurring-ical-events
 mutagen
 faster-whisper
 scikit-learn
-# sentence-transformers is only needed for EMBEDDING_PROVIDER=local (in-process embeddings,
-# non-Docker dev). The Docker image uses EMBEDDING_PROVIDER=ollama, so it's left out to avoid
-# pulling torch (~2-3GB). For local dev: pip install sentence-transformers
+# sentence-transformers omitted (pulls torch ~2-3GB); only needed for EMBEDDING_PROVIDER=local — pip install it for that.
 celery[redis]
 redis
 anthropic

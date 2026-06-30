@@ -63,8 +63,7 @@ RULES
 Return ONLY this JSON:
 {"label": "Theme name", "children": [{"label": "Key insight", "summary_ids": [1, 2]}]}"""
 
-# Cap each retrieved doc so the top-k context fits the generation window (Ollama default ctx is small)
-# instead of being silently clipped to the first doc or two.
+# Cap each retrieved doc so the top-k context fits the generation window instead of being clipped.
 RAG_DOC_CHAR_CAP = 4000
 
 

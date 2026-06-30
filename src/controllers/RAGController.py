@@ -26,10 +26,7 @@ def _normalize(matrix: np.ndarray) -> np.ndarray:
 
 
 def _kmeans(vectors: list[list[float]], k: int, seed: int = 0):
-    """Cosine k-means via scikit-learn (vectors L2-normalized → Euclidean ≈ cosine).
-
-    Returns (labels, centroids). Uses k-means++ init with multiple restarts for stable clusters.
-    """
+    """Cosine k-means via scikit-learn (L2-normalized → Euclidean ≈ cosine). Returns (labels, centroids)."""
     from sklearn.cluster import KMeans
 
     x = _normalize(np.asarray(vectors, dtype=float))
@@ -258,12 +255,8 @@ class RAGController:
         return node, edges
 
     def generate_mind_map(self, summary_ids: list[int] | None = None) -> dict:
-        """AI mind map via embedding clustering: cluster the vector store, label one branch per cluster.
-
-        Reading from the vector store (instead of stuffing every summary into one prompt) keeps each
-        LLM call inside the context window and scales to large corpora. Requires summaries to be
-        embedded (auto on summarize, or via "Load summaries").
-        """
+        """AI mind map: cluster vector-store embeddings, label one branch per cluster (scales past the
+        context window). Needs summaries embedded (auto on summarize, or via "Load summaries")."""
         records = self._collect_records(summary_ids)
         if records is None:
             return {"ok": False, "error": "Vector store is empty. Load summaries first."}

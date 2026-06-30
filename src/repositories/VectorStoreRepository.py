@@ -42,10 +42,8 @@ class VectorStoreRepository:
     def __init__(self, persist_path: str, embedder):
         self._persist_path = persist_path
         self._embedder = embedder
-        # ChromaDB caches its client/system per process. With multiple uvicorn workers, a worker's
-        # cached client holds a stale view after another worker resets/reloads the collection, which
-        # surfaces as "hnsw segment reader: Nothing found on disk" on query. Clearing the cache before
-        # building the client forces a fresh read of the current on-disk state each request.
+        # Fresh read each request — avoids a stale cached client after another worker's reset
+        # ("hnsw segment reader: Nothing found on disk").
         _clear_chroma_system_cache()
         self._client = chromadb.PersistentClient(path=persist_path)
         self._collection = self._get_or_reset_collection()
@@ -54,12 +52,8 @@ class VectorStoreRepository:
         return {"hnsw:space": "cosine", EMBEDDER_META_KEY: self._embedder.id}
 
     def _get_or_reset_collection(self):
-        """Get the collection, recreating it if the embedder changed.
-
-        Embeddings from different models have different dimensions/vector spaces and are not
-        interchangeable, so a provider change must invalidate the store. Safe because the vector
-        store is a derived cache — summaries live in SQLite and can be reloaded.
-        """
+        """Get the collection, recreating it if the embedder changed (dims aren't interchangeable;
+        safe — summaries live in SQLite and can be reloaded)."""
         collection = self._client.get_or_create_collection(
             name="summaries",
             metadata=self._collection_metadata(),
@@ -118,8 +112,7 @@ class VectorStoreRepository:
                 where=where_filter,
             )
         except Exception as e:
-            # e.g. ChromaDB "hnsw segment reader: Nothing found on disk" when the on-disk index
-            # is empty/not yet written. Treat as no results rather than a 500.
+            # Treat a query failure (e.g. "hnsw segment reader: Nothing found on disk") as empty, not 500.
             logger.warning("Vector store query failed (treating as empty): %s", e)
             return []
         items = []

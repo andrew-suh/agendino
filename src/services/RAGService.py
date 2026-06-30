@@ -51,6 +51,22 @@ Question: {question}
 
 Answer:"""
 
+LABEL_CLUSTER_PROMPT = """You are a knowledge-mapping expert. The summaries below form ONE thematic
+cluster of a knowledge base. Produce a single mind-map branch for them.
+
+RULES
+1. `label`: a SHORT theme name for the whole cluster (max 4 words).
+2. `children`: 2-5 items, each one concrete KEY INSIGHT drawn from these summaries (max 6 words).
+3. Every child MUST include `summary_ids` (array of the source summary IDs it draws from).
+4. Use the same language as the summaries. Do not repeat the same insight.
+
+Return ONLY this JSON:
+{"label": "Theme name", "children": [{"label": "Key insight", "summary_ids": [1, 2]}]}"""
+
+# Cap each retrieved doc so the top-k context fits the generation window (Ollama default ctx is small)
+# instead of being silently clipped to the first doc or two.
+RAG_DOC_CHAR_CAP = 4000
+
 
 def build_rag_context(context_docs: list[dict]) -> tuple[str, list[dict]]:
     """Assemble the prompt context string and source list from retrieved docs."""
@@ -60,6 +76,8 @@ def build_rag_context(context_docs: list[dict]) -> tuple[str, list[dict]]:
         meta = doc.get("metadata", {})
         title = meta.get("title", f"Source {i + 1}")
         text = doc.get("document", "")
+        if len(text) > RAG_DOC_CHAR_CAP:
+            text = text[:RAG_DOC_CHAR_CAP] + " …[truncated]"
         context_parts.append(f"[{title}]\n{text}")
         sources.append(
             {
@@ -84,8 +102,8 @@ def build_mind_map_content(summaries: list[dict]) -> str:
     return "Summaries:\n\n" + "\n\n---\n\n".join(summary_texts)
 
 
-def parse_mind_map_json(raw: str) -> dict:
-    """Parse mind-map JSON, repairing malformed output and falling back to an empty structure."""
+def _parse_json_object(raw: str, fallback: dict) -> dict:
+    """Parse a JSON object, repairing malformed model output, falling back when it can't be salvaged."""
     try:
         data = json.loads(raw)
         if isinstance(data, dict):
@@ -100,8 +118,18 @@ def parse_mind_map_json(raw: str) -> dict:
     except Exception:
         pass
 
-    logger.warning("Failed to parse mind map JSON, returning empty structure")
-    return {"central_topic": "Knowledge Base", "branches": [], "connections": []}
+    logger.warning("Failed to parse JSON, returning fallback structure")
+    return fallback
+
+
+def parse_mind_map_json(raw: str) -> dict:
+    """Parse a full mind-map JSON, falling back to an empty structure."""
+    return _parse_json_object(raw, {"central_topic": "Knowledge Base", "branches": [], "connections": []})
+
+
+def parse_branch_json(raw: str) -> dict:
+    """Parse a single-cluster branch JSON (label + children), falling back to an empty branch."""
+    return _parse_json_object(raw, {"label": "Theme", "children": []})
 
 
 class RAGService:
@@ -143,6 +171,20 @@ class RAGService:
         )
 
         return parse_mind_map_json(response.text or "")
+
+    def label_cluster(self, summaries: list[dict]) -> dict:
+        """Produce one mind-map branch (label + children) for a single cluster of summaries (Gemini)."""
+        content = build_mind_map_content(summaries)
+        response = self._client.models.generate_content(
+            model=self._model,
+            config=types.GenerateContentConfig(
+                system_instruction=LABEL_CLUSTER_PROMPT,
+                response_mime_type="application/json",
+                max_output_tokens=2048,
+            ),
+            contents=content,
+        )
+        return parse_branch_json(response.text or "")
 
 
 class OllamaRAGService:
@@ -191,3 +233,16 @@ class OllamaRAGService:
             max_tokens=8192,
         )
         return parse_mind_map_json(raw)
+
+    def label_cluster(self, summaries: list[dict]) -> dict:
+        """Produce one mind-map branch (label + children) for a single cluster of summaries (Ollama)."""
+        content = build_mind_map_content(summaries)
+        raw = self._chat(
+            [
+                {"role": "system", "content": LABEL_CLUSTER_PROMPT},
+                {"role": "user", "content": content},
+            ],
+            json_mode=True,
+            max_tokens=2048,
+        )
+        return parse_branch_json(raw)

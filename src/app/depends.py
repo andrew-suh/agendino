@@ -141,6 +141,7 @@ def get_dashboard_controller() -> DashboardController:
         template_path=get_template_path(),
         publish_services=_build_publish_services(),
         whisper_transcription_service=get_whisper_transcription_service(),
+        vector_store_repository=get_vector_store_repository(),
         auth_enabled=is_auth_enabled(),
     )
 
@@ -217,7 +218,7 @@ def get_rag_service():
     if provider in ("ollama", "local"):
         return OllamaRAGService(
             base_url=_config.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-            model=_config.get("OLLAMA_MODEL", "llama3.2:3b"),
+            model=_config.get("OLLAMA_MODEL", "qwen2.5:7b"),
         )
     return RAGService(api_key=_config["GEMINI_API_KEY"], model=_config["GEMINI_MODEL"])
 

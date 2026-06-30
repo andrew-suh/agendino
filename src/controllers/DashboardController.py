@@ -12,6 +12,7 @@ from models.DBTask import DBTask
 from repositories.LocalRecordingsRepository import LocalRecordingsRepository, ALLOWED_AUDIO_EXTENSIONS
 from repositories.SqliteDBRepository import SqliteDBRepository, DuplicateRecordingError
 from repositories.SystemPromptsRepository import SystemPromptsRepository
+from repositories.VectorStoreRepository import VectorStoreRepository, build_summary_document
 from services.SummarizationService import SummarizationService
 from services.TaskGenerationService import TaskGenerationService
 from services.TranscriptionService import TranscriptionService
@@ -44,6 +45,7 @@ class DashboardController:
         template_path: str,
         publish_services: dict[str, object] | None = None,
         whisper_transcription_service: WhisperTranscriptionService | None = None,
+        vector_store_repository: VectorStoreRepository | None = None,
         auth_enabled: bool = False,
     ):
         self._sqlite_db_repository = sqlite_db_repository
@@ -55,6 +57,7 @@ class DashboardController:
         self._templates = Jinja2Templates(directory=template_path)
         self._publish_services: dict[str, object] = publish_services or {}
         self._whisper_transcription_service = whisper_transcription_service
+        self._vector_store_repository = vector_store_repository
         self._auth_enabled = auth_enabled
 
     @staticmethod
@@ -470,6 +473,7 @@ class DashboardController:
             tags_str,
             prompt_id=prompt_id,
         )
+        self._index_summary(saved)
         return {
             "ok": True,
             "summary_id": saved.id,
@@ -478,6 +482,17 @@ class DashboardController:
             "title": title,
             "tags": tags,
         }
+
+    def _index_summary(self, summary) -> None:
+        """Best-effort: embed a new summary into the vector store so /ask + mind map see it without a
+        manual "Load summaries". Never fail summarization if the embedder/Ollama is unreachable."""
+        if self._vector_store_repository is None or not (summary.summary or "").strip():
+            return
+        try:
+            doc_text, metadata = build_summary_document(summary)
+            self._vector_store_repository.add_summary(summary.id, doc_text, metadata)
+        except Exception as e:
+            logger.warning("Auto-embed of summary %s failed (load summaries to backfill): %s", summary.id, e)
 
     def get_summaries(self, name: str) -> dict:
         bare_name = self._bare_name(name)

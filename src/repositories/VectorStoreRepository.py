@@ -17,6 +17,25 @@ def _clear_chroma_system_cache() -> None:
         pass
 
 
+def build_summary_document(summary) -> tuple[str, dict]:
+    """Build the embedded doc text + metadata for a summary (shared by bulk load and auto-embed)."""
+    doc_text = ""
+    if summary.title:
+        doc_text += f"Title: {summary.title}\n"
+    if summary.tags:
+        doc_text += f"Tags: {summary.tags}\n"
+    doc_text += f"\n{summary.summary}"
+
+    metadata = {
+        "summary_id": summary.id,
+        "recording_name": summary.recording_name,
+        "title": summary.title or "",
+        "tags": summary.tags or "",
+        "version": summary.version,
+    }
+    return doc_text, metadata
+
+
 class VectorStoreRepository:
     """Wraps ChromaDB with a pluggable embedder (Gemini or local) for summary vector storage."""
 

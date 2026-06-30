@@ -126,6 +126,16 @@ provider-agnostic.
   bind-mount to `settings/ollama_models`. `GPU=1` (`compose.gpu.yaml`) reserves the GPU for `ollama`
   and `celery`/Whisper — **not** `agendino` (with Ollama embeddings the web service loads no model).
   No cross-container GPU queue → VRAM is additive; mind the budget on small cards.
+- **AI mind map** (`RAGController.generate_mind_map`) reads from the **vector store** and, above
+  `MIN_CLUSTER_N` summaries, **clusters embeddings** (`sklearn.cluster.KMeans` on L2-normalized vectors
+  = cosine; adaptive `k≈√(n/2)`) and asks the LLM to label one branch per cluster (`label_cluster`) —
+  avoids overflowing the model context at scale. Re-clusters each run; small corpora fall back to the
+  single-shot `generate_mind_map`.
+- **Auto-embed on summarize:** `DashboardController.summarize_recording` embeds each new summary
+  best-effort (`build_summary_document` in `VectorStoreRepository`, shared with `load_summaries`) so
+  `/ask` + the mind map see it without a manual reload. "Load summaries" remains for backfill/repair.
+- **`/ask` context:** `build_rag_context` caps each doc (`RAG_DOC_CHAR_CAP`) and `OLLAMA_CONTEXT_LENGTH`
+  is raised so the top-k retrieved summaries fit the window instead of being clipped.
 
 ## Conventions & gotchas
 

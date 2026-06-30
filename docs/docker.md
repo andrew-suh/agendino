@@ -136,9 +136,13 @@ cards, adjust these — see [Transcription → GPU compatibility](transcription.
 
 The `ollama` service (in `compose.yaml`) provides offline **embeddings** (`EMBEDDING_PROVIDER=ollama`,
 `OLLAMA_EMBEDDING_MODEL`, default `bge-m3`) and **answer generation** (`RAG_PROVIDER=local`,
-`OLLAMA_MODEL`, default `llama3.2:3b`). The app reaches it by service name at `http://ollama:11434` —
+`OLLAMA_MODEL`, default `qwen2.5:7b`). The app reaches it by service name at `http://ollama:11434` —
 no `host.docker.internal` / `OLLAMA_HOST` setup. Models bind-mount to `settings/ollama_models`
 (auto-created on first `up`).
+
+**Recommended generation model for both modes:** `qwen2.5:7b` — strong synthesis + reliable JSON
+(used by `/ask` and the AI mind map), fits the RTX 3080 GPU and runs acceptably on CPU (e.g. Ryzen 7
+5700G + 32 GB). For snappier CPU responses, use `qwen2.5:3b`.
 
 The container **auto-pulls** `OLLAMA_EMBEDDING_MODEL` and `OLLAMA_MODEL` on startup (idempotent — only
 the first start downloads; later starts are instant). So the **first** `up` takes a few minutes while
@@ -151,10 +155,18 @@ workers, and the `agendino` image carries no `torch`/`sentence-transformers`.
 **GPU & VRAM.** `GPU=1` reserves the GPU for `ollama` and `celery` (Whisper) — **not** `agendino`
 (the web service loads no model). There is **no cross-container GPU queue**: CUDA time-slices compute
 but VRAM is additive, so overflow is a hard CUDA OOM, not a graceful wait. Budget on a 10 GB card
-shared with a desktop (~5 GB free): `bge-m3` ~1.5 GB + `llama3.2:3b` ~2.5 GB + Whisper `turbo`
-~1.5 GB. Use a smaller LLM or Whisper model if you run transcription and `/ask` at the same time.
-Changing `EMBEDDING_PROVIDER`/`OLLAMA_EMBEDDING_MODEL` triggers a one-time vector-store re-embed
-(reload summaries from the Knowledge page).
+shared with a desktop (~5 GB free): `bge-m3` ~1.5 GB + `qwen2.5:7b` ~4.7 GB + Whisper `turbo` ~1.5 GB
++ the `OLLAMA_CONTEXT_LENGTH=8192` KV cache. Use a smaller LLM (`qwen2.5:3b`), shorter context, or a
+smaller Whisper model if you run transcription and `/ask` at the same time. Changing
+`EMBEDDING_PROVIDER`/`OLLAMA_EMBEDDING_MODEL` triggers a one-time vector-store re-embed (reload
+summaries from the Knowledge page).
+
+**Knowledge base sizing.** `OLLAMA_CONTEXT_LENGTH=8192` (set on the `ollama` service) lets `/ask` see
+the full top-k retrieved summaries instead of clipping to the first ~4096 tokens; lower it on small
+cards. The **AI mind map** clusters summary embeddings and labels one branch per cluster
+(re-clustered each generation, branch count scales with corpus size), so it represents the whole
+knowledge base at any scale — but it reads from the vector store, so summaries must be **embedded**
+first (automatic on summarize; "Load summaries" backfills existing ones / repairs after a reset).
 
 ## Concurrency tuning (CPU vs GPU)
 

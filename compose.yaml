@@ -73,6 +73,9 @@ services:
       - OLLAMA_KEEP_ALIVE=5m
       - OLLAMA_MAX_LOADED_MODELS=2          # keep the embedding + generation models both resident
       - OLLAMA_NUM_PARALLEL=1
+      # Larger context so /ask sees the full top-k retrieved summaries (default ~4096 clips them) and
+      # bge-m3 gets its full embedding context. Raises KV-cache VRAM — lower on small cards.
+      - OLLAMA_CONTEXT_LENGTH=8192
     # Start the server, wait for it, then pull the models (idempotent — a no-op once cached in the
     # volume, so only the first start downloads). Models track .env (defaults if unset).
     entrypoint: ["/bin/sh", "-c"]
@@ -81,7 +84,7 @@ services:
         ollama serve &
         until ollama list >/dev/null 2>&1; do sleep 1; done
         ollama pull "${OLLAMA_EMBEDDING_MODEL:-bge-m3}" || true
-        ollama pull "${OLLAMA_MODEL:-llama3.2:3b}" || true
+        ollama pull "${OLLAMA_MODEL:-qwen2.5:7b}" || true
         wait
     restart: unless-stopped
 

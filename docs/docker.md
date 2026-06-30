@@ -163,10 +163,13 @@ summaries from the Knowledge page).
 
 **Knowledge base sizing.** `OLLAMA_CONTEXT_LENGTH=8192` (set on the `ollama` service) lets `/ask` see
 the full top-k retrieved summaries instead of clipping to the first ~4096 tokens; lower it on small
-cards. The **AI mind map** clusters summary embeddings and labels one branch per cluster
-(re-clustered each generation, branch count scales with corpus size), so it represents the whole
-knowledge base at any scale — but it reads from the vector store, so summaries must be **embedded**
-first (automatic on summarize; "Load summaries" backfills existing ones / repairs after a reset).
+cards. Embeddings use Ollama's native `/api/embed` with `num_batch=8192` (an embedding model processes
+the whole input in one batch, so a long summary would otherwise fail with "input … too large to
+process"); summaries longer than 8192 tokens are truncated to the model context. The **AI mind map**
+clusters summary embeddings and labels one branch per cluster (re-clustered each generation, branch
+count scales with corpus size), so it represents the whole knowledge base at any scale — but it reads
+from the vector store, so summaries must be **embedded** first (automatic on summarize; "Load
+summaries" backfills existing ones / repairs after a reset).
 
 ## Concurrency tuning (CPU vs GPU)
 

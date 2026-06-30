@@ -95,11 +95,9 @@ class OllamaEmbedder:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         response = httpx.post(
-            f"{self._base_url}/v1/embeddings",
-            json={"model": self._model, "input": texts},
+            f"{self._base_url}/api/embed",
+            json={"model": self._model, "input": texts, "options": {"num_batch": 8192}},
             timeout=120,
         )
         response.raise_for_status()
-        data = response.json().get("data", [])
-        data.sort(key=lambda d: d.get("index", 0))  # keep input order
-        return [d["embedding"] for d in data]
+        return response.json().get("embeddings", [])

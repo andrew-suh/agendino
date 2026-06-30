@@ -105,8 +105,11 @@ Embedder classes live in `repositories/embedders.py`; all expose `embed(texts)` 
 collection stamp). Wired in `depends.py` (`get_embedder`, `get_rag_service`); `RAGController` is
 provider-agnostic.
 - **`EMBEDDING_PROVIDER`** = `gemini` | `ollama` | `local`:
-  - `ollama` (Docker default) — `OllamaEmbedder` calls the **dockerized Ollama** container's
-    `/v1/embeddings`. One shared model for all web workers (`OLLAMA_EMBEDDING_MODEL`, default `bge-m3`).
+  - `ollama` (Docker default) — `OllamaEmbedder` calls the **dockerized Ollama** container's **native
+    `/api/embed`** (not OpenAI `/v1/embeddings`) so it can pass `num_batch=8192`: embedding models
+    process the whole input in one batch, so a long summary needs `num_batch ≥ its token count` or it
+    errors ("input … too large to process"). One shared model for all web workers
+    (`OLLAMA_EMBEDDING_MODEL`, default `bge-m3`); inputs over 8192 tokens are truncated to context.
   - `local` — in-process `LocalEmbedder` (sentence-transformers, lazy-loaded like Whisper). Loads one
     model **per uvicorn worker**; for non-Docker dev (`sentence-transformers` is **not** in
     `requirements.txt` — pip install it). Use a **long-context** model (`bge-m3`, 8192 ctx).

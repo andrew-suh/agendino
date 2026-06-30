@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 from models.DBRecording import DBRecording
 from models.DBTask import DBTask
 from repositories.LocalRecordingsRepository import LocalRecordingsRepository, ALLOWED_AUDIO_EXTENSIONS
-from repositories.SqliteDBRepository import SqliteDBRepository
+from repositories.SqliteDBRepository import SqliteDBRepository, DuplicateRecordingError
 from repositories.SystemPromptsRepository import SystemPromptsRepository
 from services.SummarizationService import SummarizationService
 from services.TaskGenerationService import TaskGenerationService
@@ -238,7 +238,12 @@ class DashboardController:
             file_extension=file_ext,
             created_at=datetime.now(),
         )
-        new_id = self._sqlite_db_repository.insert_recording(db_rec)
+        try:
+            new_id = self._sqlite_db_repository.insert_recording(db_rec)
+        except DuplicateRecordingError:
+            # Lost a concurrent-upload race after passing the pre-check above. The file
+            # on disk is identical (same name + bytes), so no cleanup is needed.
+            return {"ok": False, "error": f"A recording named '{bare_name}' already exists in the database"}
 
         return {
             "ok": True,

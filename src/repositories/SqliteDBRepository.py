@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sqlite3
 
@@ -9,13 +10,28 @@ from models.DBSummary import DBSummary
 from models.DBTask import DBTask
 from models.DBSharedCalendar import DBSharedCalendar
 
+logger = logging.getLogger(__name__)
+
+
+class DuplicateRecordingError(Exception):
+    """Raised when inserting a recording whose name already exists (UNIQUE violation)."""
+
 
 class SqliteDBRepository:
+    # DB files whose one-time migrations have already run. The repo is constructed
+    # per request, so this guard keeps the schema checks off the hot path after the
+    # first construction (per distinct DB file). Migrations are idempotent, so a rare
+    # double-run from a concurrent first construction is harmless.
+    _migrated_paths: set[str] = set()
+
     def __init__(self, db_name: str, db_path: str, init_sql_script: str):
         self._db_path = os.path.join(db_path, db_name)
         if not os.path.exists(self._db_path):
             self._initialize_db(init_sql_script)
-        self._ensure_recording_columns()
+        if self._db_path not in SqliteDBRepository._migrated_paths:
+            self._ensure_recording_columns()
+            self._ensure_recording_indexes()
+            SqliteDBRepository._migrated_paths.add(self._db_path)
 
     def _connect(self) -> sqlite3.Connection:
         # timeout: wait up to 30s for a write lock instead of failing immediately,
@@ -61,6 +77,22 @@ class SqliteDBRepository:
             except Exception:
                 conn.execute("ALTER TABLE recording ADD COLUMN transcription_status TEXT NOT NULL DEFAULT 'idle'")
                 conn.commit()
+        finally:
+            conn.close()
+
+    def _ensure_recording_indexes(self) -> None:
+        """Migration: enforce uniqueness of recording.name so concurrent uploads can't
+        create duplicate rows (the upload pre-check is not atomic). Skips creation if a
+        legacy DB already contains duplicate names rather than crashing startup."""
+        conn = self._connect()
+        try:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_recording_name ON recording (name)")
+            conn.commit()
+        except sqlite3.IntegrityError:
+            logger.warning(
+                "Could not create unique index on recording.name: duplicate names exist. "
+                "Resolve duplicates to enable atomic upload dedup."
+            )
         finally:
             conn.close()
 
@@ -133,6 +165,10 @@ class SqliteDBRepository:
             )
             conn.commit()
             return result.lastrowid
+        except sqlite3.IntegrityError as e:
+            # UNIQUE(name) violation — a concurrent upload won the race. Atomic backstop
+            # for the non-atomic pre-check in DashboardController.upload_recording.
+            raise DuplicateRecordingError(db_recording.name) from e
         finally:
             conn.close()
 

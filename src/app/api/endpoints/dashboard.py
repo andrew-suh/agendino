@@ -3,6 +3,7 @@ import uuid
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 import task_locks
 from app import depends
@@ -41,7 +42,11 @@ async def upload_recording(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
     file_data = await file.read()
-    return dashboard_controller.upload_recording(file.filename, file_data, label)
+    # The save + DB insert is blocking; offload it so it doesn't park the event
+    # loop (keeps the frontend responsive and lets parallel uploads overlap).
+    return await run_in_threadpool(
+        dashboard_controller.upload_recording, file.filename, file_data, label
+    )
 
 
 @router.get("/audio/{name}")

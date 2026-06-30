@@ -98,6 +98,35 @@ in the request.
 (`VectorStoreRepository`); embeddings are **not** auto-cleaned when a recording is deleted (known gap),
 though `delete_transcript` does clean them.
 
+## Knowledge base (RAG) providers
+
+Both RAG AI calls are provider-toggleable (mirrors `SUMMARIZATION_PROVIDER`), default Gemini.
+Embedder classes live in `repositories/embedders.py`; all expose `embed(texts)` + an `id` (used as the
+collection stamp). Wired in `depends.py` (`get_embedder`, `get_rag_service`); `RAGController` is
+provider-agnostic.
+- **`EMBEDDING_PROVIDER`** = `gemini` | `ollama` | `local`:
+  - `ollama` (Docker default) — `OllamaEmbedder` calls the **dockerized Ollama** container's
+    `/v1/embeddings`. One shared model for all web workers (`OLLAMA_EMBEDDING_MODEL`, default `bge-m3`).
+  - `local` — in-process `LocalEmbedder` (sentence-transformers, lazy-loaded like Whisper). Loads one
+    model **per uvicorn worker**; for non-Docker dev (`sentence-transformers` is **not** in
+    `requirements.txt` — pip install it). Use a **long-context** model (`bge-m3`, 8192 ctx).
+  - `gemini` — cloud.
+- **`RAG_PROVIDER`** = `gemini` | `ollama` | `local`. `ollama` (Docker) and `local` (non-Docker host
+  Ollama) are **synonyms** → `OllamaRAGService` (Ollama's OpenAI-compatible `/v1/chat/completions` via
+  `httpx`, `OLLAMA_MODEL`). **Unset → follows `EMBEDDING_PROVIDER`**: Ollama generation when
+  embeddings are `ollama`, else Gemini.
+- **`get_embedder()` is a process-level singleton; `get_vector_store_repository()` is NOT** — a cached
+  ChromaDB collection handle goes stale across the reset's delete/recreate (caused
+  `hnsw segment reader: Nothing found on disk`).
+- **Mismatch reset:** `VectorStoreRepository` stamps the collection with the embedder id and
+  **auto-clears on startup** if it changed (embeddings of different models/dims aren't interchangeable).
+  Safe — summaries live in SQLite; reload from the Knowledge page. `get_stats()` derives `needs_reload`
+  as `total_summaries > 0 and loaded_count == 0`.
+- **Docker/GPU:** the `ollama` service (in `compose.yaml`) serves embeddings + generation; models
+  bind-mount to `settings/ollama_models`. `GPU=1` (`compose.gpu.yaml`) reserves the GPU for `ollama`
+  and `celery`/Whisper — **not** `agendino` (with Ollama embeddings the web service loads no model).
+  No cross-container GPU queue → VRAM is additive; mind the budget on small cards.
+
 ## Conventions & gotchas
 
 - **Vanilla JS frontend, no build.** Top-level functions in `static/dashboard.js` (`loadDashboard`,

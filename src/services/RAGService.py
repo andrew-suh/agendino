@@ -1,6 +1,7 @@
 import json
 import logging
 
+import httpx
 from google import genai
 from google.genai import types
 from json_repair import repair_json
@@ -51,6 +52,58 @@ Question: {question}
 Answer:"""
 
 
+def build_rag_context(context_docs: list[dict]) -> tuple[str, list[dict]]:
+    """Assemble the prompt context string and source list from retrieved docs."""
+    context_parts = []
+    sources = []
+    for i, doc in enumerate(context_docs):
+        meta = doc.get("metadata", {})
+        title = meta.get("title", f"Source {i + 1}")
+        text = doc.get("document", "")
+        context_parts.append(f"[{title}]\n{text}")
+        sources.append(
+            {
+                "title": title,
+                "recording_name": meta.get("recording_name", ""),
+                "summary_id": meta.get("summary_id", ""),
+                "distance": doc.get("distance"),
+            }
+        )
+    return "\n\n---\n\n".join(context_parts), sources
+
+
+def build_mind_map_content(summaries: list[dict]) -> str:
+    """Build the user content listing summaries for mind-map generation."""
+    summary_texts = []
+    for s in summaries:
+        tags = ", ".join(s.get("tags", []))
+        # Truncate summary for context window efficiency
+        summary_preview = s.get("summary", "")[:600]
+        entry = f"[ID: {s['id']}] Title: {s.get('title', 'Untitled')}\nTags: {tags}\n{summary_preview}"
+        summary_texts.append(entry)
+    return "Summaries:\n\n" + "\n\n---\n\n".join(summary_texts)
+
+
+def parse_mind_map_json(raw: str) -> dict:
+    """Parse mind-map JSON, repairing malformed output and falling back to an empty structure."""
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    try:
+        repaired = repair_json(raw, return_objects=True)
+        if isinstance(repaired, dict):
+            return repaired
+    except Exception:
+        pass
+
+    logger.warning("Failed to parse mind map JSON, returning empty structure")
+    return {"central_topic": "Knowledge Base", "branches": [], "connections": []}
+
+
 class RAGService:
     def __init__(self, api_key, model: str):
         self._client = genai.Client(api_key=api_key)
@@ -58,23 +111,7 @@ class RAGService:
 
     def ask(self, question: str, context_docs: list[dict]) -> dict:
         """RAG query: answer a question using retrieved context."""
-        context_parts = []
-        sources = []
-        for i, doc in enumerate(context_docs):
-            meta = doc.get("metadata", {})
-            title = meta.get("title", f"Source {i + 1}")
-            text = doc.get("document", "")
-            context_parts.append(f"[{title}]\n{text}")
-            sources.append(
-                {
-                    "title": title,
-                    "recording_name": meta.get("recording_name", ""),
-                    "summary_id": meta.get("summary_id", ""),
-                    "distance": doc.get("distance"),
-                }
-            )
-
-        context = "\n\n---\n\n".join(context_parts)
+        context, sources = build_rag_context(context_docs)
         prompt = RAG_PROMPT.format(context=context, question=question)
 
         response = self._client.models.generate_content(
@@ -92,16 +129,7 @@ class RAGService:
 
     def generate_mind_map(self, summaries: list[dict]) -> dict:
         """Generate a mind map structure from summaries using Gemini."""
-
-        summary_texts = []
-        for s in summaries:
-            tags = ", ".join(s.get("tags", []))
-            # Truncate summary for context window efficiency
-            summary_preview = s.get("summary", "")[:600]
-            entry = f"[ID: {s['id']}] Title: {s.get('title', 'Untitled')}\nTags: {tags}\n{summary_preview}"
-            summary_texts.append(entry)
-
-        content = "Summaries:\n\n" + "\n\n---\n\n".join(summary_texts)
+        content = build_mind_map_content(summaries)
 
         logger.info("Generating mind map with Gemini for %d summaries…", len(summaries))
         response = self._client.models.generate_content(
@@ -114,20 +142,52 @@ class RAGService:
             contents=content,
         )
 
-        raw = response.text or ""
-        try:
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                return data
-        except (json.JSONDecodeError, TypeError):
-            pass
+        return parse_mind_map_json(response.text or "")
 
-        try:
-            repaired = repair_json(raw, return_objects=True)
-            if isinstance(repaired, dict):
-                return repaired
-        except Exception:
-            pass
 
-        logger.warning("Failed to parse mind map JSON, returning empty structure")
-        return {"central_topic": "Knowledge Base", "branches": [], "connections": []}
+class OllamaRAGService:
+    """RAG generation via a local Ollama server (offline), using its OpenAI-compatible API."""
+
+    def __init__(self, base_url: str, model: str):
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+
+    def _chat(self, messages: list[dict], *, json_mode: bool = False, max_tokens: int = 4096) -> str:
+        payload = {
+            "model": self._model,
+            "messages": messages,
+            "stream": False,
+            "max_tokens": max_tokens,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        response = httpx.post(
+            f"{self._base_url}/v1/chat/completions",
+            json=payload,
+            timeout=300,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"] or ""
+
+    def ask(self, question: str, context_docs: list[dict]) -> dict:
+        """RAG query: answer a question using retrieved context."""
+        context, sources = build_rag_context(context_docs)
+        prompt = RAG_PROMPT.format(context=context, question=question)
+        answer = self._chat([{"role": "user", "content": prompt}])
+        return {"answer": answer, "sources": sources}
+
+    def generate_mind_map(self, summaries: list[dict]) -> dict:
+        """Generate a mind map structure from summaries using a local Ollama model."""
+        content = build_mind_map_content(summaries)
+        logger.info("Generating mind map with Ollama (%s) for %d summaries…", self._model, len(summaries))
+        raw = self._chat(
+            [
+                {"role": "system", "content": MIND_MAP_PROMPT},
+                {"role": "user", "content": content},
+            ],
+            json_mode=True,
+            max_tokens=8192,
+        )
+        return parse_mind_map_json(raw)

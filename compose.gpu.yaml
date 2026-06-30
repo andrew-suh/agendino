@@ -1,9 +1,16 @@
-# GPU override for Whisper transcription (runs on the celery worker).
+# GPU override for Whisper transcription (celery worker) and Ollama (embeddings + RAG generation).
 #
 # Enable:  docker compose -f compose.yaml -f compose.gpu.yaml up -d
 # Or in .env:  uncomment GPU=1  (COMPOSE_FILE then loads this file automatically)
 # Disable: run plain `docker compose up -d` (CPU), or re-comment GPU=1.
 # Note: WHISPER_DEVICE is left to base 'auto', which resolves to CUDA once the GPU is reserved here.
+# Ollama auto-detects the reserved GPU. The agendino web service loads no model (embeddings run in
+# the Ollama container), so it gets no GPU reservation.
+#
+# VRAM budget (e.g. 10 GB card shared with a desktop ~5 GB): bge-m3 (~1.5 GB) + llama3.2:3b (~2.5 GB)
+# + Whisper. There is no cross-container GPU queue — VRAM is additive and overflow is a hard CUDA OOM.
+# Whisper is set to 'turbo' (~1.5 GB) here for headroom; raise to large-v3 if you have the VRAM and
+# won't transcribe and ask at the same time. See docs/docker.md.
 #
 # Requires an NVIDIA GPU + the NVIDIA Container Toolkit on the host. See docs/docker.md.
 services:
@@ -12,7 +19,16 @@ services:
       # float16 needs compute capability >= 7.0 (e.g. RTX 20-series and newer).
       # Older cards (e.g. GTX 750 Ti, CC 5.0) must use int8 / float32 — see docs/transcription.md.
       - WHISPER_COMPUTE_TYPE=float16
-      - WHISPER_MODEL_SIZE=large-v3
+      - WHISPER_MODEL_SIZE=turbo
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  ollama:
     deploy:
       resources:
         reservations:

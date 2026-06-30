@@ -10,9 +10,10 @@ from repositories.LocalRecordingsRepository import LocalRecordingsRepository
 from repositories.SqliteDBRepository import SqliteDBRepository
 from repositories.SystemPromptsRepository import SystemPromptsRepository
 from repositories.VectorStoreRepository import VectorStoreRepository
+from repositories.embedders import GeminiEmbedder, LocalEmbedder, OllamaEmbedder
 from services.ClaudeSummarizationService import ClaudeSummarizationService
 from services.NotionService import NotionService
-from services.RAGService import RAGService
+from services.RAGService import OllamaRAGService, RAGService
 from services.SummarizationService import SummarizationService
 from services.TaskGenerationService import TaskGenerationService
 from services.TranscriptionService import TranscriptionService
@@ -163,17 +164,61 @@ def get_proactor_controller() -> ProactorController:
     )
 
 
+# Cache only the embedder as a process-level singleton: a local embedder loads a multi-hundred-MB
+# model that must not reload per request. The VectorStoreRepository is intentionally NOT cached — a
+# cached ChromaDB collection handle goes stale across a collection delete/recreate (the mismatch
+# reset), which other workers then query → "hnsw segment reader: Nothing found on disk". Building it
+# per request is cheap (ChromaDB caches the PersistentClient by path) and yields a fresh handle.
+_embedder = None
+
+
+def get_embedder():
+    """Return the configured embedder (Gemini cloud by default, or a local sentence-transformers model)."""
+    global _embedder
+    if _embedder is None:
+        _config = get_config()
+        provider = _config.get("EMBEDDING_PROVIDER", "gemini").lower()
+        if provider == "ollama":
+            _embedder = OllamaEmbedder(
+                base_url=_config.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+                model=_config.get("OLLAMA_EMBEDDING_MODEL", "bge-m3"),
+            )
+        elif provider == "local":
+            _embedder = LocalEmbedder(
+                model_name=_config.get("LOCAL_EMBEDDING_MODEL", "BAAI/bge-m3"),
+                device=_config.get("LOCAL_EMBEDDING_DEVICE", "auto"),
+            )
+        else:
+            _embedder = GeminiEmbedder(
+                api_key=_config["GEMINI_API_KEY"],
+                model=_config["GEMINI_EMBEDDING_MODEL"],
+            )
+    return _embedder
+
+
 def get_vector_store_repository() -> VectorStoreRepository:
-    _config = get_config()
     return VectorStoreRepository(
         persist_path=os.path.join(get_root_path(), "settings/vector_store"),
-        api_key=_config["GEMINI_API_KEY"],
-        model=_config["GEMINI_EMBEDDING_MODEL"],
+        embedder=get_embedder(),
     )
 
 
-def get_rag_service() -> RAGService:
+def get_rag_service():
+    """Return the configured RAG generation service.
+
+    Provider values: `ollama` (Docker) and `local` (non-Docker host Ollama) are synonyms — both use
+    Ollama via OLLAMA_BASE_URL; `gemini` is cloud. When RAG_PROVIDER is unset it follows the embedding
+    provider: Ollama generation when EMBEDDING_PROVIDER=ollama, otherwise Gemini.
+    """
     _config = get_config()
+    embedding_provider = _config.get("EMBEDDING_PROVIDER", "gemini").lower()
+    default_provider = "ollama" if embedding_provider == "ollama" else "gemini"
+    provider = (_config.get("RAG_PROVIDER") or default_provider).lower()
+    if provider in ("ollama", "local"):
+        return OllamaRAGService(
+            base_url=_config.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+            model=_config.get("OLLAMA_MODEL", "llama3.2:3b"),
+        )
     return RAGService(api_key=_config["GEMINI_API_KEY"], model=_config["GEMINI_MODEL"])
 
 

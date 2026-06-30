@@ -54,6 +54,9 @@ class RAGController:
             "ok": True,
             "total_summaries": total_summaries,
             "loaded_count": loaded_count,
+            # Hint the UI to (re)load: summaries exist but none are in the vector store — true for a
+            # fresh store and after an embedder-change reset wipes it.
+            "needs_reload": total_summaries > 0 and loaded_count == 0,
         }
 
     def list_summaries(self) -> dict:
@@ -125,7 +128,10 @@ class RAGController:
         if self._vector_store.count() == 0:
             return {"ok": False, "error": "Vector store is empty. Load summaries first."}
 
-        results = self._vector_store.search(query, top_k, summary_ids=summary_ids)
+        try:
+            results = self._vector_store.search(query, top_k, summary_ids=summary_ids)
+        except Exception as e:
+            return {"ok": False, "error": f"Search failed: {str(e)}"}
         return {
             "ok": True,
             "results": results,

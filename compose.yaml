@@ -19,8 +19,14 @@ services:
       # One knob drives uvicorn workers AND the dashboard's parallel upload limit.
       # Override via your shell or .env.
       - WEB_CONCURRENCY=${WEB_CONCURRENCY:-4}
+      # Local embeddings (EMBEDDING_PROVIDER=local) run in-process here. 'auto' resolves to the
+      # GPU once one is reserved (see compose.gpu.yaml), else CPU — mirrors celery's WHISPER_DEVICE.
+      - LOCAL_EMBEDDING_DEVICE=auto
+      # Persist the downloaded embedding model on the mounted settings volume.
+      - HF_HOME=/app/settings/hf_cache
     depends_on:
       - redis
+      - ollama
     # $$ escapes Compose interpolation so the value is read from the container env at runtime.
     command: sh -c "uvicorn main:app --host 0.0.0.0 --port 8000 --workers $${WEB_CONCURRENCY:-4}"
 
@@ -52,6 +58,32 @@ services:
     image: redis:7-alpine
     expose:
       - 6379
+
+  # Local embeddings (EMBEDDING_PROVIDER=ollama) + RAG generation (RAG_PROVIDER=local).
+  # One shared model serves all web workers. CPU by default; GPU=1 reserves a GPU (compose.gpu.yaml).
+  ollama:
+    image: ollama/ollama
+    expose:
+      - 11434
+    volumes:
+      # Bind-mounted under settings/ alongside vector_store & hf_cache (gitignored runtime data).
+      # Docker auto-creates settings/ollama_models on first `up` if it doesn't exist.
+      - "./settings/ollama_models:/root/.ollama"
+    environment:
+      - OLLAMA_KEEP_ALIVE=5m
+      - OLLAMA_MAX_LOADED_MODELS=2          # keep the embedding + generation models both resident
+      - OLLAMA_NUM_PARALLEL=1
+    # Start the server, wait for it, then pull the models (idempotent — a no-op once cached in the
+    # volume, so only the first start downloads). Models track .env (defaults if unset).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        until ollama list >/dev/null 2>&1; do sleep 1; done
+        ollama pull "${OLLAMA_EMBEDDING_MODEL:-bge-m3}" || true
+        ollama pull "${OLLAMA_MODEL:-llama3.2:3b}" || true
+        wait
+    restart: unless-stopped
 
   traefik:
     build:

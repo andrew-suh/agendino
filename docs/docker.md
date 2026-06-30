@@ -128,9 +128,33 @@ Run plain `docker compose up -d` (CPU mode), or re-comment the `GPU=1` line in `
   base file only on non-GPU hosts.
 - The path separator is `:` on Linux (`;` on Windows).
 
-`compose.gpu.yaml` sets `WHISPER_COMPUTE_TYPE=float16` and `WHISPER_MODEL_SIZE=large-v3`,
-which suit a modern GPU. For older cards, adjust these — see
-[Transcription → GPU compatibility](transcription.md).
+`compose.gpu.yaml` sets `WHISPER_COMPUTE_TYPE=float16` and `WHISPER_MODEL_SIZE=turbo`,
+which suit a modern GPU sharing VRAM with Ollama. Raise to `large-v3` if you have the VRAM; for older
+cards, adjust these — see [Transcription → GPU compatibility](transcription.md).
+
+### Local knowledge base (Ollama)
+
+The `ollama` service (in `compose.yaml`) provides offline **embeddings** (`EMBEDDING_PROVIDER=ollama`,
+`OLLAMA_EMBEDDING_MODEL`, default `bge-m3`) and **answer generation** (`RAG_PROVIDER=local`,
+`OLLAMA_MODEL`, default `llama3.2:3b`). The app reaches it by service name at `http://ollama:11434` —
+no `host.docker.internal` / `OLLAMA_HOST` setup. Models bind-mount to `settings/ollama_models`
+(auto-created on first `up`).
+
+The container **auto-pulls** `OLLAMA_EMBEDDING_MODEL` and `OLLAMA_MODEL` on startup (idempotent — only
+the first start downloads; later starts are instant). So the **first** `up` takes a few minutes while
+the models download, and embeddings/answers return errors until they finish. To pull a different model
+manually: `docker compose exec ollama ollama pull <model>`.
+
+Because embeddings live in the Ollama container, one model is shared across all `agendino` web
+workers, and the `agendino` image carries no `torch`/`sentence-transformers`.
+
+**GPU & VRAM.** `GPU=1` reserves the GPU for `ollama` and `celery` (Whisper) — **not** `agendino`
+(the web service loads no model). There is **no cross-container GPU queue**: CUDA time-slices compute
+but VRAM is additive, so overflow is a hard CUDA OOM, not a graceful wait. Budget on a 10 GB card
+shared with a desktop (~5 GB free): `bge-m3` ~1.5 GB + `llama3.2:3b` ~2.5 GB + Whisper `turbo`
+~1.5 GB. Use a smaller LLM or Whisper model if you run transcription and `/ask` at the same time.
+Changing `EMBEDDING_PROVIDER`/`OLLAMA_EMBEDDING_MODEL` triggers a one-time vector-store re-embed
+(reload summaries from the Knowledge page).
 
 ## Concurrency tuning (CPU vs GPU)
 

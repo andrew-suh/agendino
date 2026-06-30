@@ -1,35 +1,80 @@
 import logging
 
 import chromadb
-from google import genai
 
 logger = logging.getLogger(__name__)
 
+# Stored in the collection metadata so we can detect when the configured embedder changed.
+EMBEDDER_META_KEY = "embedder_id"
+
+
+def _clear_chroma_system_cache() -> None:
+    """Drop ChromaDB's per-process client cache so the next client reads fresh on-disk state."""
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+        SharedSystemClient.clear_system_cache()
+    except Exception:
+        pass
+
 
 class VectorStoreRepository:
-    """Wraps ChromaDB with Gemini embeddings for summary vector storage."""
+    """Wraps ChromaDB with a pluggable embedder (Gemini or local) for summary vector storage."""
 
-    def __init__(self, persist_path: str, api_key: str, model: str):
+    def __init__(self, persist_path: str, embedder):
         self._persist_path = persist_path
+        self._embedder = embedder
+        # ChromaDB caches its client/system per process. With multiple uvicorn workers, a worker's
+        # cached client holds a stale view after another worker resets/reloads the collection, which
+        # surfaces as "hnsw segment reader: Nothing found on disk" on query. Clearing the cache before
+        # building the client forces a fresh read of the current on-disk state each request.
+        _clear_chroma_system_cache()
         self._client = chromadb.PersistentClient(path=persist_path)
-        self._collection = self._client.get_or_create_collection(
-            name="summaries",
-            metadata={"hnsw:space": "cosine"},
-        )
-        self._genai_client = genai.Client(api_key=api_key)
-        self._model = model
+        self._collection = self._get_or_reset_collection()
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:
-        result = self._genai_client.models.embed_content(
-            model=self._model,
-            contents=texts,
+    def _collection_metadata(self) -> dict:
+        return {"hnsw:space": "cosine", EMBEDDER_META_KEY: self._embedder.id}
+
+    def _get_or_reset_collection(self):
+        """Get the collection, recreating it if the embedder changed.
+
+        Embeddings from different models have different dimensions/vector spaces and are not
+        interchangeable, so a provider change must invalidate the store. Safe because the vector
+        store is a derived cache — summaries live in SQLite and can be reloaded.
+        """
+        collection = self._client.get_or_create_collection(
+            name="summaries",
+            metadata=self._collection_metadata(),
         )
-        embeddings = result.embeddings or []
-        return [e.values for e in embeddings if e.values is not None]
+        stored = (collection.metadata or {}).get(EMBEDDER_META_KEY)
+        if stored == self._embedder.id:
+            return collection
+
+        if stored is not None:
+            logger.warning(
+                "Embedder changed (%s → %s); clearing vector store. Reload summaries to repopulate.",
+                stored,
+                self._embedder.id,
+            )
+        elif collection.count() > 0:
+            logger.warning(
+                "Vector store has no embedder stamp (legacy data); clearing to re-stamp with %s. "
+                "Reload summaries to repopulate.",
+                self._embedder.id,
+            )
+
+        # Tolerate a concurrent reset from another worker (collection may already be gone).
+        try:
+            self._client.delete_collection("summaries")
+        except Exception:
+            pass
+        return self._client.get_or_create_collection(
+            name="summaries",
+            metadata=self._collection_metadata(),
+        )
 
     def add_summary(self, summary_id: int, text: str, metadata: dict) -> None:
         doc_id = f"summary_{summary_id}"
-        embeddings = self._embed([text])
+        embeddings = self._embedder.embed([text])
         self._collection.upsert(
             ids=[doc_id],
             embeddings=embeddings,
@@ -41,17 +86,23 @@ class VectorStoreRepository:
         count = self._collection.count()
         if count == 0:
             return []
-        query_embedding = self._embed([query])
+        query_embedding = self._embedder.embed([query])
 
         where_filter = None
         if summary_ids:
             where_filter = {"summary_id": {"$in": summary_ids}}
 
-        results = self._collection.query(
-            query_embeddings=query_embedding,
-            n_results=min(top_k, count),
-            where=where_filter,
-        )
+        try:
+            results = self._collection.query(
+                query_embeddings=query_embedding,
+                n_results=min(top_k, count),
+                where=where_filter,
+            )
+        except Exception as e:
+            # e.g. ChromaDB "hnsw segment reader: Nothing found on disk" when the on-disk index
+            # is empty/not yet written. Treat as no results rather than a 500.
+            logger.warning("Vector store query failed (treating as empty): %s", e)
+            return []
         items = []
         for i in range(len(results["ids"][0])):
             items.append(
@@ -89,5 +140,5 @@ class VectorStoreRepository:
         self._client.delete_collection("summaries")
         self._collection = self._client.get_or_create_collection(
             name="summaries",
-            metadata={"hnsw:space": "cosine"},
+            metadata=self._collection_metadata(),
         )

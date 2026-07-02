@@ -4,9 +4,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 DIARIZATION_SETUP_HINT = (
-    "Set HF_TOKEN in .env (and accept the model terms on "
-    "hf.co/pyannote/speaker-diarization-3.1 and hf.co/pyannote/segmentation-3.0), "
-    "or set LOCAL_DIARIZATION_ENABLED=false."
+    "Set HF_TOKEN in .env and accept the model terms on "
+    "hf.co/pyannote/speaker-diarization-3.1, hf.co/pyannote/segmentation-3.0, and "
+    "hf.co/pyannote/speaker-diarization-community-1 (pyannote.audio 4.x silently loads "
+    "community-1 in place of the deprecated 3.1 pipeline), or set "
+    "LOCAL_DIARIZATION_ENABLED=false."
 )
 
 

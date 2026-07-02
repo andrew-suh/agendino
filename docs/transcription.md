@@ -66,8 +66,11 @@ celery worker; no audio leaves your machine.
 
 1. Create a free token at [hf.co/settings/tokens](https://huggingface.co/settings/tokens) (read scope).
 2. While logged in, accept the terms on
-   [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and
-   [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0).
+   [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1),
+   [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0), and
+   [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+   — pyannote.audio 4.x deprecates the 3.1 pipeline and silently loads community-1 (a separately
+   gated repo) in its place, so all three are needed.
 3. Set `HF_TOKEN=hf_...` and `LOCAL_DIARIZATION_ENABLED=true` in `.env`.
 
 The models download on first use (cached in `settings/hf_cache`; the token isn't needed after

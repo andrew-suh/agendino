@@ -12,6 +12,12 @@ The Knowledge page lets you search or ask natural-language questions across your
 
 Embeddings and answers can run on **Gemini** (cloud) or **offline** (Ollama, or in-process for non-Docker dev) — see [Docker → Local knowledge base](docker.md) for the `EMBEDDING_PROVIDER` / `RAG_PROVIDER` settings.
 
+> **In-process embeddings** (`EMBEDDING_PROVIDER=local`) are for non-Docker dev only and need a
+> manual `pip install sentence-transformers` (it isn't in `requirements.txt`). Configure with
+> `LOCAL_EMBEDDING_MODEL` (default `BAAI/bge-m3` — use a long-context model, 8192 ctx) and
+> `LOCAL_EMBEDDING_DEVICE` (`auto`|`cpu`|`cuda`|`mps`). Each uvicorn worker loads its own model
+> copy; in Docker use `EMBEDDING_PROVIDER=ollama` instead, which shares one model.
+
 ## Setup
 
 New summaries are **indexed automatically** when they're generated, so search and Ask stay current on their own. Use **Load Summaries** on the Knowledge page to backfill summaries created before indexing was enabled, or to rebuild after switching the embedding model. Embeddings are stored in `settings/vector_store/`.

@@ -370,7 +370,7 @@ celery -A celery_tasks worker --loglevel=info
 
 `compose.yaml` already wires this up: a `redis` service, a `celery` worker service
 (`working_dir: /app/src`; worker concurrency set via the `CELERY_CONCURRENCY` env var,
-default `1` — see [Docker → Concurrency tuning](docs/docker.md)), and `CELERY_BROKER_URL`
+default `1` — see [Docker → Concurrency tuning](docker.md)), and `CELERY_BROKER_URL`
 + `depends_on: redis` on the `agendino` API service. Just `docker compose up --build`.
 
 > Important: the `celery` and `agendino` services must mount the **same** host

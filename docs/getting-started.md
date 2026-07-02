@@ -59,9 +59,10 @@ Copy the example env file and fill it in — at minimum set `GEMINI_API_KEY`:
 cp .env.example .env
 ```
 
-Every variable (Gemini, summarization provider, Whisper, Notion, auth, deployment/tuning) is
-documented in `.env.example`. For a local (non-Docker) run, set `WHISPER_DEVICE=cuda` there to
-use a GPU. See [Authentication](authentication.md) for `AUTH_ENABLED` and
+Common variables (Gemini, summarization provider, Whisper, Notion, auth, deployment/tuning) are
+documented in `.env.example`; rarely-needed ones are listed in its footer with pointers into these
+docs. For a local (non-Docker) run, add `WHISPER_DEVICE=cuda` to `.env` to use a GPU. See
+[Authentication](authentication.md) for `AUTH_ENABLED` and
 [Transcription](transcription.md) for Whisper settings.
 
 ## Running the Server

@@ -60,7 +60,7 @@ Browse the full documentation at **[docs/index.md](docs/index.md)**.
 | **Core** | [HiDock](docs/hidock-integration.md) · [Recordings](docs/recording-management.md) · [Calendar](docs/calendar.md) |
 | **AI** | [Transcription](docs/transcription.md) · [Summarization](docs/summarization.md) · [Tasks](docs/task-generation.md) · [Recap](docs/daily-recap.md) · [Knowledge](docs/knowledge-base.md) · [Proactor](docs/proactive-analysis.md) |
 | **Advanced** | [Notion](docs/notion-publishing.md) · [Auth](docs/authentication.md) · [Prompts](docs/custom-system-prompts.md) |
-| **Reference** | [API Endpoints](docs/api-reference.md) · [Project Structure](docs/project-structure.md) · [Celery Guide](CELERY_GUIDE.md) |
+| **Reference** | [API Endpoints](docs/api-reference.md) · [Project Structure](docs/project-structure.md) · [Celery Guide](docs/celery-guide.md) |
 
 ## Running Tests
 

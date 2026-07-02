@@ -71,8 +71,10 @@ celery worker; no audio leaves your machine.
 3. Set `HF_TOKEN=hf_...` and `LOCAL_DIARIZATION_ENABLED=true` in `.env`.
 
 The models download on first use (cached in `settings/hf_cache`; the token isn't needed after
-that). If diarization is enabled without a token and no cached models, transcription **fails
-immediately with a setup message** rather than silently producing an unlabeled transcript.
+that). Setup problems — no token and no cached models, or a token whose account hasn't accepted
+the model terms — make transcription **fail immediately with a setup message** (the diarization
+pipeline is loaded before any Whisper work, and setup errors skip the usual task retries)
+rather than silently producing an unlabeled transcript.
 
 | Variable | Default | Notes |
 |----------|---------|-------|

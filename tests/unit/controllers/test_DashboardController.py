@@ -6,6 +6,7 @@ import pytest
 
 from controllers.DashboardController import DashboardController
 from models.DBRecording import DBRecording
+from services.WhisperTranscriptionService import DiarizationSetupError
 
 
 @pytest.fixture
@@ -179,6 +180,20 @@ class TestDashboardControllerTranscribeRecording:
         result = ctrl.transcribe_recording("test")
         assert result["ok"] is False
         assert "Transcription failed" in result["error"]
+
+    def test_diarization_setup_error_propagates(self, mock_services):
+        # Not swallowed into the error dict: the Celery layer needs the exception
+        # type to skip autoretry for non-recoverable setup problems.
+        ctrl = mock_services["controller"]
+        mock_services["local_repo"].exists.return_value = True
+        mock_services["sqlite_db"].get_recording_by_name.return_value = None
+        mock_services["local_repo"].get_path.return_value = "/path/to/test.hda"
+        mock_services["transcription_service"].transcribe.side_effect = DiarizationSetupError(
+            "accept the model terms"
+        )
+
+        with pytest.raises(DiarizationSetupError, match="accept the model terms"):
+            ctrl.transcribe_recording("test")
 
 
 class TestDashboardControllerSummary:

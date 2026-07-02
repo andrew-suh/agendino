@@ -16,7 +16,7 @@ from repositories.VectorStoreRepository import VectorStoreRepository, build_summ
 from services.SummarizationService import SummarizationService
 from services.TaskGenerationService import TaskGenerationService
 from services.TranscriptionService import TranscriptionService
-from services.WhisperTranscriptionService import WhisperTranscriptionService
+from services.WhisperTranscriptionService import DiarizationSetupError, WhisperTranscriptionService
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +381,9 @@ class DashboardController:
 
         try:
             transcript = svc.transcribe(audio_path, mime_type=mime_type)
+        except DiarizationSetupError:
+            # Propagate with its type intact so the Celery layer can skip autoretry.
+            raise
         except Exception as e:
             return {"ok": False, "error": f"Transcription failed: {str(e)}"}
 

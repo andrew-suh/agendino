@@ -214,6 +214,9 @@
                 <div class="text-center p-5" id="transcript-loading">
                     <div class="spinner-border text-primary" role="status"></div>
                     <p class="mt-2 text-muted">Loading transcript…</p>
+                    <button type="button" class="btn btn-sm btn-outline-danger d-none mt-2" id="transcript-cancel-btn">
+                        <i class="bi bi-stop-circle"></i> Stop transcription
+                    </button>
                 </div>
                 <div id="transcript-audio-player" class="d-none mb-3 p-3 bg-light rounded">
                     <small class="text-muted d-block mb-2"><i class="bi bi-volume-up me-1"></i>Audio</small>
@@ -475,5 +478,5 @@
 {% block extra_js %}
 <script src="/static/hidock-device.js?v=1"></script>
     <script>window.UPLOAD_CONCURRENCY = {{ upload_concurrency | default(4) }};</script>
-    <script src="/static/dashboard.js?v=9"></script>
+    <script src="/static/dashboard.js?v=10"></script>
 {% endblock %}

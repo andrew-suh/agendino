@@ -91,6 +91,11 @@ in the request.
   `GET /tasks/active` (scans the Redis locks) and resumes polling — driven from `loadDashboard()` in
   `static/dashboard.js`; `_activePolls` dedups poll loops. Row indicators: "Transcribing…" (from the
   persisted `transcription_status` column) and "Summarizing…" (from `/tasks/active`).
+- **Cancel:** `DELETE /tasks/status/{task_id}` revokes (`terminate=True`) **and** cleans up what the
+  killed worker can't — releases the Redis lock and resets `transcription_status` to `idle`
+  (`after_return` never runs in a terminated child). UI: stop button on the "Transcribing…" row and in
+  the transcript modal. Polls treat `REVOKED` (or a locally tracked `_cancelledTasks` id — needed
+  because a solo-pool worker can't terminate an executing task) as terminal with `err.cancelled`.
 
 ## Data model (SQLite)
 

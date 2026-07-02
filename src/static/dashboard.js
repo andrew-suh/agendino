@@ -259,19 +259,52 @@ function initNotifications() {
 
 // ─── Background task polling (shared by triggers and post-refresh resume) ───
 const _activePolls = new Set();         // task_ids with a poll loop already running
+const _cancelledTasks = new Set();      // task_ids cancelled from this page (ends polls even if the worker can't terminate the task, e.g. solo pool)
 let _activeSummarizeNames = new Set();  // recording names with an in-flight summarization
 
 // Poll a queued Celery task until it finishes. Resolves with the SUCCESS result;
-// throws on FAILURE or timeout.
+// throws on FAILURE, cancellation (err.cancelled = true), or timeout.
 async function pollTaskStatus(taskId, { interval = 5000, maxAttempts = 720 } = {}) {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const res = await fetch(`${TASK_STATUS_URL}/${encodeURIComponent(taskId)}`);
         const data = await res.json();
+        if (_cancelledTasks.has(taskId) || data.status === "REVOKED") {
+            _cancelledTasks.delete(taskId);
+            const err = new Error("Cancelled");
+            err.cancelled = true;
+            throw err;
+        }
         if (data.status === "SUCCESS") return data.result;
         if (data.status === "FAILURE") throw new Error(data.error || "Task failed");
         await new Promise(r => setTimeout(r, interval));
     }
     throw new Error("Task timed out");
+}
+
+// Revoke a queued/running Celery task; the server also releases its Redis lock
+// and resets the persisted transcription status.
+async function cancelTask(taskId) {
+    await fetch(`${TASK_STATUS_URL}/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+    _cancelledTasks.add(taskId);
+}
+
+// Stop an in-flight transcription from its row indicator: the row only knows the
+// recording name, so look up the task_id from the active locks first.
+async function cancelTranscription(name, btn) {
+    if (!confirm(`Stop transcribing "${name}"?`)) return;
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch(TASKS_ACTIVE_URL);
+        const { tasks } = await res.json();
+        const t = (tasks || []).find(x => x.type === "transcribe" && x.name === name);
+        if (t) await cancelTask(t.task_id);
+        // If nothing was found the task already finished (or the lock expired) —
+        // either way the refresh shows the current state.
+        await loadDashboard();
+    } catch (err) {
+        notify(`${name}: ${err.message}`, { title: "Stop failed" });
+        if (btn) btn.disabled = false;
+    }
 }
 
 // Poll a task, registered in _activePolls so it isn't double-polled. Returns the result.
@@ -290,8 +323,10 @@ function resumeActiveTasks(tasks) {
     for (const t of tasks || []) {
         if (!t.task_id || _activePolls.has(t.task_id)) continue;
         pollTracked(t.task_id).then(() => loadDashboard()).catch((err) => {
-            const label = t.name ? `${t.type || "Task"} (${t.name})` : (t.type || "Task");
-            notify(`${label} failed: ${err.message}`, { title: "Background task failed" });
+            if (!err.cancelled) {
+                const label = t.name ? `${t.type || "Task"} (${t.name})` : (t.type || "Task");
+                notify(`${label} failed: ${err.message}`, { title: "Background task failed" });
+            }
             loadDashboard();
         });
     }
@@ -341,7 +376,10 @@ function actionButtons(rec) {
         btns.push(`<button class="btn btn-sm btn-outline-secondary btn-play-audio" data-name="${rec.name}" title="Play audio"><i class="bi bi-play-circle"></i></button>`);
         if (rec.transcription_status === "queued" || rec.transcription_status === "running") {
             // Transcription in flight (survives a page refresh — see resumeActiveTasks).
-            btns.push(`<button class="btn btn-sm btn-outline-primary" disabled title="Transcription in progress"><span class="spinner-border spinner-border-sm"></span> Transcribing…</button>`);
+            btns.push(`<div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-primary" disabled title="Transcription in progress"><span class="spinner-border spinner-border-sm"></span> Transcribing…</button>
+                <button class="btn btn-outline-danger btn-cancel-transcribe" data-name="${rec.name}" title="Stop transcription"><i class="bi bi-stop-circle"></i></button>
+            </div>`);
         } else if (rec.has_transcript) {
             btns.push(`<button class="btn btn-sm btn-outline-success btn-view-transcript" data-name="${rec.name}" title="View transcript"><i class="bi bi-file-text"></i></button>`);
             if (rec.has_summary) {
@@ -1440,6 +1478,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const transcriptAudio = $("#transcript-audio");
     const modalError = $("#transcript-error");
     const transcriptDeleteBtn = $("#transcript-delete-btn");
+    const transcriptCancelBtn = $("#transcript-cancel-btn");
     let currentTranscriptName = null;
 
     function extractSpeakerNames(transcript) {
@@ -1520,6 +1559,7 @@ document.addEventListener("DOMContentLoaded", () => {
          transcriptEditToggle.innerHTML = '<i class="bi bi-pencil-square"></i> Edit';
          transcriptEditToggle.disabled = true;
          hide(modalError);
+         hide(transcriptCancelBtn);
          show(modalBackdrop);
      }
 
@@ -1601,6 +1641,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (data.status === "queued" || data.status === "already_running") {
                 // Queued on a Celery worker — poll until it finishes.
+                if (transcriptCancelBtn) {
+                    transcriptCancelBtn.dataset.taskId = data.task_id;
+                    transcriptCancelBtn.disabled = false;
+                    show(transcriptCancelBtn);
+                }
                 const result = await pollTracked(data.task_id);
                 hide(modalLoading);
                 showTranscriptPreview(result.transcript);
@@ -1618,10 +1663,17 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             hide(modalLoading);
-            modalError.textContent = `Transcription failed: ${err.message}`;
-            show(modalError);
-            notify(`${name}: ${err.message}`, { title: "Transcription failed" });
+            if (err.cancelled) {
+                modalError.textContent = "Transcription stopped.";
+                show(modalError);
+                await loadDashboard();
+            } else {
+                modalError.textContent = `Transcription failed: ${err.message}`;
+                show(modalError);
+                notify(`${name}: ${err.message}`, { title: "Transcription failed" });
+            }
         } finally {
+            hide(transcriptCancelBtn);
             if (triggerBtn) {
                 triggerBtn.disabled = false;
                 triggerBtn.innerHTML = triggerBtn._origHTML;
@@ -1629,8 +1681,31 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    // Stop button inside the transcript modal's loading state.
+    if (transcriptCancelBtn) {
+        transcriptCancelBtn.addEventListener("click", async () => {
+            const taskId = transcriptCancelBtn.dataset.taskId;
+            if (!taskId) return;
+            transcriptCancelBtn.disabled = true;
+            try {
+                await cancelTask(taskId);
+            } catch (err) {
+                transcriptCancelBtn.disabled = false;
+                notify(`Stop failed: ${err.message}`, { title: "Stop failed" });
+            }
+        });
+    }
+
     // Transcribe button (main button - default engine) & engine menu item
     document.addEventListener("click", async (e) => {
+        // Stop button on a "Transcribing…" row indicator
+        const stopBtn = e.target.closest(".btn-cancel-transcribe");
+        if (stopBtn) {
+            e.preventDefault();
+            await cancelTranscription(stopBtn.dataset.name, stopBtn);
+            return;
+        }
+
         // Engine menu item clicked
         const engineItem = e.target.closest(".btn-transcribe-engine");
         if (engineItem) {

@@ -10,6 +10,7 @@ from app import depends
 from celery_config import celery_app
 from celery_tasks import generate_tasks_task, summarize_audio_task, transcribe_audio_task
 from controllers.DashboardController import DashboardController, MIME_TYPES
+from repositories.SqliteDBRepository import SqliteDBRepository
 from repositories.VectorStoreRepository import VectorStoreRepository
 from models.dto.DeleteRecordingRequestDTO import DeleteRecordingRequestDTO
 from models.dto.FolderRequestDTO import CreateFolderRequestDTO, RenameFolderRequestDTO, DeleteFolderRequestDTO
@@ -280,9 +281,22 @@ def get_task_status(task_id: str):
 
 
 @router.delete("/tasks/status/{task_id}")
-def cancel_task(task_id: str):
+def cancel_task(
+    task_id: str,
+    sqlite_db: SqliteDBRepository = Depends(depends.get_sqlite_db_repository),
+):
+    """Revoke an in-flight task and clean up what the killed worker can't:
+    DatabaseTask.after_return never runs in a terminated child, so the Redis
+    lock and the persisted transcription status must be reset here.
+    """
+    held = next((e for e in task_locks.list_active() if e["task_id"] == task_id), None)
     celery_app.control.revoke(task_id, terminate=True)
-    return {"ok": True, "message": f"Task {task_id} revoked"}
+    if held:
+        task_locks.release(held["key"])
+        parts = held["key"].split(":")  # ["lock", <type>, ...]
+        if len(parts) >= 3 and parts[1] == "transcribe":
+            sqlite_db.set_transcription_status(":".join(parts[2:]), "idle")
+    return {"ok": True, "cancelled": bool(held), "message": f"Task {task_id} revoked"}
 
 
 @router.get("/tasks/active")

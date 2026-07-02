@@ -10,6 +10,11 @@ DIARIZATION_SETUP_HINT = (
 )
 
 
+class DiarizationSetupError(RuntimeError):
+    """Diarization can't run due to configuration (missing token, gated-model terms
+    not accepted, model not cached). Retrying won't help — Celery must not autoretry."""
+
+
 def merge_words_with_speakers(words, turns):
     """Group timed words into speaker-labeled lines.
 
@@ -122,7 +127,7 @@ class WhisperTranscriptionService:
         cached = try_to_load_from_cache(self._diarization_model, "config.yaml")
         if isinstance(cached, str):
             return
-        raise RuntimeError(
+        raise DiarizationSetupError(
             "Local diarization is enabled but HF_TOKEN is not set and the pyannote "
             f"models are not cached. {DIARIZATION_SETUP_HINT}"
         )
@@ -154,7 +159,7 @@ class WhisperTranscriptionService:
                 self._diarization_pipeline = pipeline
                 logger.info("Diarization pipeline loaded.")
             except Exception as e:
-                raise RuntimeError(
+                raise DiarizationSetupError(
                     f"Failed to load the diarization pipeline '{self._diarization_model}': {e}. "
                     f"{DIARIZATION_SETUP_HINT}"
                 ) from e
@@ -180,6 +185,10 @@ class WhisperTranscriptionService:
 
         if self._diarization_enabled:
             self._ensure_diarization_ready()
+            # Load the pipeline before any Whisper work so access problems the cheap
+            # preflight can't see (e.g. gated-model terms not accepted on HF) fail in
+            # seconds instead of after a full transcription pass.
+            self._get_diarization_pipeline()
 
         logger.info("Transcribing '%s' with local Whisper (%s)…", path.name, self._model_size)
 

@@ -65,3 +65,23 @@ def test_summarize_handler_surfaces_summaries_fetch_error(dashboard_js):
         "the non-ok /summaries branch must surface summariesData.error so "
         "the real failure reason isn't masked"
     )
+
+
+def test_poll_treats_revoked_as_terminal(dashboard_js):
+    """A cancelled task ends in REVOKED, not FAILURE. The poll loop must stop
+    on it (flagged err.cancelled) instead of spinning until the 1-hour timeout."""
+    body = extract_function_body(dashboard_js, "pollTaskStatus")
+    assert '"REVOKED"' in body, "pollTaskStatus must treat REVOKED as terminal"
+    assert re.search(r"\.cancelled\s*=\s*true", body), (
+        "cancellation must be distinguishable from failure (err.cancelled) so "
+        "callers don't show a 'Transcription failed' notification for a user stop"
+    )
+
+
+def test_transcribing_row_has_stop_button(dashboard_js):
+    """The in-flight row indicator is a disabled button; without a companion
+    stop button there is no UI path to DELETE /tasks/status/{task_id}."""
+    body = extract_function_body(dashboard_js, "actionButtons")
+    assert "btn-cancel-transcribe" in body, (
+        "the Transcribing… indicator must render a btn-cancel-transcribe stop button"
+    )

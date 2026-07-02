@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from services.WhisperTranscriptionService import (
+    DiarizationSetupError,
     WhisperTranscriptionService,
     merge_words_with_speakers,
 )
@@ -75,7 +76,22 @@ class TestDiarizationPreflight:
         service = make_service(diarization_enabled=True, hf_token=None)
         service._get_model = MagicMock()
 
-        with pytest.raises(RuntimeError, match="HF_TOKEN"):
+        with pytest.raises(DiarizationSetupError, match="HF_TOKEN"):
+            service.transcribe(str(audio))
+        service._get_model.assert_not_called()
+
+    def test_pipeline_access_failure_fails_before_whisper(self, tmp_path):
+        # Token set but gated-model terms not accepted on HF: the cheap preflight
+        # passes, so the eager pipeline load must fail before any Whisper work.
+        audio = tmp_path / "rec.mp3"
+        audio.write_bytes(b"\x00")
+        service = make_service(diarization_enabled=True, hf_token="hf_x")
+        service._get_model = MagicMock()
+        service._get_diarization_pipeline = MagicMock(
+            side_effect=DiarizationSetupError("Failed to load the diarization pipeline")
+        )
+
+        with pytest.raises(DiarizationSetupError, match="diarization pipeline"):
             service.transcribe(str(audio))
         service._get_model.assert_not_called()
 
@@ -123,7 +139,7 @@ class TestDiarizationPipelineLoad:
 
         self._install_fake_pyannote(monkeypatch, failing_load)
         service = make_service(diarization_enabled=True, hf_token="hf_x")
-        with pytest.raises(RuntimeError, match="HF_TOKEN"):
+        with pytest.raises(DiarizationSetupError, match="HF_TOKEN"):
             service._get_diarization_pipeline()
 
     def test_load_success_moves_pipeline_to_device_and_caches(self, monkeypatch):

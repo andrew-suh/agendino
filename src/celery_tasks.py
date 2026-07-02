@@ -8,6 +8,7 @@ from celery import Task
 import task_locks
 from app.depends import get_dashboard_controller, get_sqlite_db_repository
 from celery_config import celery_app
+from services.WhisperTranscriptionService import DiarizationSetupError
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 class DatabaseTask(Task):
     """Base task class that builds the DashboardController and cleans up task locks."""
     autoretry_for = (Exception,)
+    # Setup errors (gated HF model terms not accepted, missing token) won't fix
+    # themselves on retry — fail immediately instead of re-running transcription 3x.
+    dont_autoretry_for = (DiarizationSetupError,)
     retry_kwargs = {"max_retries": 3, "countdown": 5}
     retry_backoff = True
 

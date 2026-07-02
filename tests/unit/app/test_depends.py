@@ -36,6 +36,32 @@ class TestGetEmbedder:
         assert depends.get_embedder() is depends.get_embedder()
 
 
+class TestGetWhisperTranscriptionService:
+    def test_diarization_defaults(self, configure):
+        configure()
+        service = depends.get_whisper_transcription_service()
+        assert service._diarization_enabled is False
+        assert service._hf_token is None
+        assert service._diarization_model == "pyannote/speaker-diarization-3.1"
+        assert service._diarization_device == "auto"
+
+    def test_diarization_enabled_with_token(self, configure):
+        configure(LOCAL_DIARIZATION_ENABLED="true", HF_TOKEN="hf_x")
+        service = depends.get_whisper_transcription_service()
+        assert service._diarization_enabled is True
+        assert service._hf_token == "hf_x"
+
+    def test_diarization_device_unset_follows_whisper_device(self, configure):
+        configure(WHISPER_DEVICE="cuda")
+        service = depends.get_whisper_transcription_service()
+        assert service._diarization_device == "cuda"
+
+    def test_diarization_device_explicit_overrides(self, configure):
+        configure(WHISPER_DEVICE="cuda", DIARIZATION_DEVICE="cpu")
+        service = depends.get_whisper_transcription_service()
+        assert service._diarization_device == "cpu"
+
+
 class TestGetRagService:
     def test_unset_follows_ollama_embeddings(self, configure):
         configure(EMBEDDING_PROVIDER="ollama", OLLAMA_BASE_URL="http://o:11434", OLLAMA_MODEL="m")

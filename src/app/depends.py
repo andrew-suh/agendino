@@ -76,6 +76,10 @@ def get_whisper_transcription_service() -> WhisperTranscriptionService:
         model_size=_config.get("WHISPER_MODEL_SIZE", "small"),
         device=_config.get("WHISPER_DEVICE", "auto"),
         compute_type=_config.get("WHISPER_COMPUTE_TYPE", "auto"),
+        diarization_enabled=_config.get("LOCAL_DIARIZATION_ENABLED", "false").lower() in ("true", "1", "yes"),
+        hf_token=_config.get("HF_TOKEN"),
+        diarization_model=_config.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1"),
+        diarization_device=_config.get("DIARIZATION_DEVICE") or _config.get("WHISPER_DEVICE", "auto"),
     )
 
 

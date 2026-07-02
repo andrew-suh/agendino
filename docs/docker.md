@@ -150,14 +150,18 @@ the models download, and embeddings/answers return errors until they finish. To 
 manually: `docker compose exec ollama ollama pull <model>`.
 
 Because embeddings live in the Ollama container, one model is shared across all `agendino` web
-workers, and the `agendino` image carries no `torch`/`sentence-transformers`.
+workers, and no embedding model loads in-process. (The image does carry `torch` — it ships with
+`pyannote.audio` for optional local diarization — but the web service never loads a model.)
 
 **GPU & VRAM.** `GPU=1` reserves the GPU for `ollama` and `celery` (Whisper) — **not** `agendino`
 (the web service loads no model). There is **no cross-container GPU queue**: CUDA time-slices compute
 but VRAM is additive, so overflow is a hard CUDA OOM, not a graceful wait. Budget on a 10 GB card
 shared with a desktop (~5 GB free): `bge-m3` ~1.5 GB + `qwen2.5:7b` ~4.7 GB + Whisper `turbo` ~1.5 GB
 + the `OLLAMA_CONTEXT_LENGTH=8192` KV cache. Use a smaller LLM (`qwen2.5:3b`), shorter context, or a
-smaller Whisper model if you run transcription and `/ask` at the same time. Changing
+smaller Whisper model if you run transcription and `/ask` at the same time. Local diarization
+(`LOCAL_DIARIZATION_ENABLED=true`) adds ~2–3 GB on the `celery` side when loaded — set
+`DIARIZATION_DEVICE=cpu` to keep it out of VRAM while Whisper stays on the GPU
+(see [Transcription → Local speaker diarization](transcription.md)). Changing
 `EMBEDDING_PROVIDER`/`OLLAMA_EMBEDDING_MODEL` triggers a one-time vector-store re-embed (reload
 summaries from the Knowledge page).
 

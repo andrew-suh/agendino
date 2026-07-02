@@ -15,8 +15,8 @@ AgenDino offers two transcription engines. You can choose between them per recor
 | Feature | Gemini (Cloud) | Whisper (Local) |
 |---------|---------------|-----------------|
 | **Runs on** | Google Cloud | Your machine |
-| **Speaker diarization** | ✅ Automatic | ❌ Not included |
-| **Speaker labels** | ✅ Yes | ❌ No |
+| **Speaker diarization** | ✅ Automatic | ✅ Optional (local pyannote) |
+| **Speaker labels** | ✅ Yes | ✅ With `LOCAL_DIARIZATION_ENABLED` |
 | **Timestamps** | ✅ Yes | ✅ Yes |
 | **Long recordings** | ⚠️ May truncate | ✅ Full transcription |
 | **Privacy** | Audio sent to Google | Fully offline |
@@ -53,6 +53,36 @@ Configure Whisper via environment variables in `.env`:
 | `WHISPER_COMPUTE_TYPE` | `auto` | `auto`, `int8`, `int8_float16`, `float16`, `float32` |
 
 Larger models produce better accuracy but require more RAM and processing time. The `small` model is a good balance for most use cases.
+
+### Local speaker diarization (optional)
+
+By default Whisper transcripts have timestamps but no speaker labels. Setting
+`LOCAL_DIARIZATION_ENABLED=true` runs a local [pyannote](https://github.com/pyannote/pyannote-audio)
+pipeline alongside Whisper and produces the same `[MM:SS] Speaker N:` format as Gemini
+transcription — the speaker-rename UI works on the result. Everything runs offline in the
+celery worker; no audio leaves your machine.
+
+**One-time setup** (the pyannote models are free but license-gated on Hugging Face):
+
+1. Create a free token at [hf.co/settings/tokens](https://huggingface.co/settings/tokens) (read scope).
+2. While logged in, accept the terms on
+   [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and
+   [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0).
+3. Set `HF_TOKEN=hf_...` and `LOCAL_DIARIZATION_ENABLED=true` in `.env`.
+
+The models download on first use (cached in `settings/hf_cache`; the token isn't needed after
+that). If diarization is enabled without a token and no cached models, transcription **fails
+immediately with a setup message** rather than silently producing an unlabeled transcript.
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `LOCAL_DIARIZATION_ENABLED` | `false` | Speaker labels for local Whisper |
+| `HF_TOKEN` | — | Only needed until the models are cached |
+| `DIARIZATION_MODEL` | `pyannote/speaker-diarization-3.1` | |
+| `DIARIZATION_DEVICE` | follows `WHISPER_DEVICE` | `auto`, `cpu`, `cuda` — set `cpu` to keep VRAM flat while Whisper uses the GPU (in Docker this is the only split knob, since compose hardcodes `WHISPER_DEVICE=auto` on celery) |
+
+**Cost:** ~2–3 GB extra RAM (or VRAM) while loaded, and extra processing time — a small
+fraction of the audio duration on GPU, roughly 0.5–1.5× the audio duration on CPU.
 
 ### GPU acceleration
 

@@ -149,7 +149,12 @@ provider-agnostic.
 - **FastAPI route ordering:** literal paths must be declared **before** param paths — e.g.
   `/tasks/active` and `/tasks/status/{id}` come before `/tasks/{summary_id}`.
 - **Speaker labels:** transcripts use `[MM:SS] Speaker N:` lines; the speaker-rename UI parses that
-  format. Gemini transcription does diarization; local Whisper does not.
+  format. Gemini transcription does diarization; local Whisper does too when
+  `LOCAL_DIARIZATION_ENABLED=true` (pyannote in the celery worker; needs `HF_TOKEN` for the one-time
+  gated download — enabled without it and no cached models, transcription **fails fast by design**,
+  no silent unlabeled fallback). `DIARIZATION_DEVICE` (unset → follows `WHISPER_DEVICE`) is the only
+  split-device knob that works in Docker, since compose hardcodes `WHISPER_DEVICE=auto` on celery.
+  Word/turn merge logic: `merge_words_with_speakers` in `WhisperTranscriptionService.py`.
 - **flake8:** keep module-level code (e.g. `logger = logging.getLogger(__name__)`) below imports
   (E402); the style CI will fail otherwise.
 - **Secrets:** `.env` is gitignored; `certs/*` is gitignored except `.gitkeep`; `__pycache__/`/`*.pyc`

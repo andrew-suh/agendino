@@ -9,6 +9,7 @@ icalendar
 recurring-ical-events
 mutagen
 faster-whisper
+pyannote.audio
 scikit-learn
 # sentence-transformers omitted (pulls torch ~2-3GB); only needed for EMBEDDING_PROVIDER=local — pip install it for that.
 celery[redis]

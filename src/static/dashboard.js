@@ -1875,7 +1875,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function formatMarkdown(text) {
         // Basic markdown-to-HTML: headings, bold, italic, lists, line breaks
-        return text
+        return (text || "")
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
@@ -2129,10 +2129,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 const summariesData = await summariesRes.json();
                 if (summariesData.ok) {
                     summaryContent.innerHTML = renderSummaryVersions(summariesData.summaries || []);
+                    show(summaryContent);
                 } else {
-                    summaryContent.innerHTML = formatMarkdown(data.summary);
+                    // Task finished but no summary came back — surface the real error.
+                    summaryError.textContent = summariesData.error || "Summary not found after task completed";
+                    show(summaryError);
                 }
-                show(summaryContent);
                 await loadDashboard();
             } else {
                 summaryError.textContent = data.error;

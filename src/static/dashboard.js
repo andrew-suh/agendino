@@ -299,9 +299,14 @@ async function cancelTranscription(name, btn) {
         const res = await fetch(TASKS_ACTIVE_URL);
         const { tasks } = await res.json();
         const t = (tasks || []).find(x => x.type === "transcribe" && x.name === name);
-        if (t) await cancelTask(t.task_id);
-        // If nothing was found the task already finished (or the lock expired) —
-        // either way the refresh shows the current state.
+        if (t) {
+            await cancelTask(t.task_id);
+        } else {
+            // No live task/lock (e.g. the worker died mid-task and the lock
+            // expired): the DB status is stale, so ask the server to reset it —
+            // otherwise the row stays stuck on "Transcribing…" forever.
+            await fetch(`${TRANSCRIBE_URL}/${encodeURIComponent(name)}/reset`, { method: "POST" });
+        }
         await loadDashboard();
     } catch (err) {
         notify(`${name}: ${err.message}`, { title: "Stop failed" });

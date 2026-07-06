@@ -97,6 +97,23 @@ def transcribe_recording(
     }
 
 
+@router.post("/transcribe/{name}/reset")
+def reset_transcription_status(
+    name: str,
+    dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
+):
+    bare = dashboard_controller.bare_name(name)
+    holder = task_locks.current_holder(task_locks.transcribe_lock_key(bare))
+    if holder:
+        return {
+            "ok": False,
+            "task_id": holder,
+            "error": "Transcription is still in flight — cancel the task instead",
+        }
+    dashboard_controller.set_transcription_status(bare, "idle")
+    return {"ok": True, "message": f"Transcription status reset for {bare}"}
+
+
 @router.get("/transcript/{name}")
 def get_transcript(
     name: str,

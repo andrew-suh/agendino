@@ -78,6 +78,18 @@ def test_poll_treats_revoked_as_terminal(dashboard_js):
     )
 
 
+def test_cancel_transcription_resets_stale_status(dashboard_js):
+    """When /tasks/active has no lock for the recording (worker died mid-task,
+    lock TTL expired), the stop button must still clear the stale DB status via
+    POST /transcribe/{name}/reset — otherwise the row shows "Transcribing…"
+    forever with no UI path out."""
+    body = extract_function_body(dashboard_js, "cancelTranscription")
+    assert re.search(r"/reset`?\s*,\s*{\s*method:\s*\"POST\"", body), (
+        "cancelTranscription must POST to the /transcribe/{name}/reset endpoint "
+        "when no active task is found for the recording"
+    )
+
+
 def test_transcribing_row_has_stop_button(dashboard_js):
     """The in-flight row indicator is a disabled button; without a companion
     stop button there is no UI path to DELETE /tasks/status/{task_id}."""

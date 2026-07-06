@@ -383,8 +383,6 @@ class DashboardController:
         try:
             transcript = svc.transcribe(audio_path, mime_type=mime_type)
         except (DiarizationSetupError, SoftTimeLimitExceeded):
-            # Propagate with the type intact so the Celery layer can skip autoretry:
-            # neither a setup error nor a timeout will fix itself on a re-run.
             raise
         except Exception as e:
             return {"ok": False, "error": f"Transcription failed: {str(e)}"}

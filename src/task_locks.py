@@ -17,11 +17,14 @@ import os
 
 import redis
 
+from celery_config import TASK_TIME_LIMIT
+
 logger = logging.getLogger(__name__)
 
-# Safety-net TTL: a little longer than the hard task time limit (30 min) so a worker
-# that dies mid-task eventually frees the lock on its own.
-LOCK_TTL_SECONDS = int(os.getenv("TASK_LOCK_TTL", str(31 * 60)))
+# Safety-net TTL: a little longer than the hard task time limit so a worker
+# that dies mid-task eventually frees the lock on its own. Keep TASK_LOCK_TTL
+# above CELERY_TASK_TIME_LIMIT if you override either.
+LOCK_TTL_SECONDS = int(os.getenv("TASK_LOCK_TTL", str(TASK_TIME_LIMIT + 60)))
 
 _redis_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 _client: redis.Redis | None = None

@@ -290,10 +290,11 @@ mechanisms prevent this:
   - **Not acquired** → read the existing value and return
     `{status: "already_running", task_id: <existing>}` so the frontend polls the
     task that is already running instead of starting a new one.
-- The **worker** releases the lock in `DatabaseTask.after_return` (so the lock spans
-  the whole run, even across the API and worker containers). The TTL
-  (`TASK_LOCK_TTL`, default 31 min — just over the 30 min hard task limit) is only a
-  safety net so a crashed/terminated worker cannot deadlock a file forever.
+- The **worker** releases the lock in `DatabaseTask.after_return` — but only on
+  terminal returns: `after_return` also fires on each RETRY, where the lock must stay
+  held because the task re-runs under the same `task_id`. The TTL (`TASK_LOCK_TTL`,
+  default: hard task limit + 60 s) is only a safety net so a crashed/terminated worker
+  cannot deadlock a file forever.
 
 ### 2. `transcription_status` DB column (durable, drives UI)
 
@@ -419,26 +420,21 @@ celery -A celery_tasks flower
 
 ## Configuration
 
-Edit `src/celery_config.py` to customize:
+The broker URL and time limits are environment-driven (see `src/celery_config.py`):
 
-```python
-celery_app.conf.update(
-    # Redis broker URL
-    broker_url="redis://localhost:6379/0",
-    result_backend="redis://localhost:6379/0",
+| Variable | Default | Meaning |
+|---|---|---|
+| `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Redis broker + result backend |
+| `CELERY_TASK_TIME_LIMIT` | `3600` (1 h) | Hard limit (seconds) — the worker child is killed |
+| `CELERY_TASK_SOFT_TIME_LIMIT` | hard limit − 120 s | Raises `SoftTimeLimitExceeded` inside the task, so it fails cleanly (status set to `failed`, lock released) before the hard kill |
+| `TASK_LOCK_TTL` | hard limit + 60 s | Safety-net TTL on the Redis dedup locks; keep it above the hard limit |
 
-    # Task settings
-    task_serializer="json",
-    result_serializer="json",
+Transcribing a long recording with CPU Whisper can exceed an hour — raise
+`CELERY_TASK_TIME_LIMIT` if transcriptions fail with `SoftTimeLimitExceeded` (the soft
+limit and lock TTL follow it automatically unless you set them explicitly). A soft
+time-limit failure is **not retried**: re-running the same job would just time out again.
 
-    # Time limits (in seconds)
-    task_soft_time_limit=25 * 60,    # 25 minutes
-    task_time_limit=30 * 60,         # 30 minutes (hard limit)
-
-    # Result expiry
-    result_expires=3600,              # 1 hour
-)
-```
+Other settings (serializers, result expiry) are edited in `src/celery_config.py` directly.
 
 ## Troubleshooting
 

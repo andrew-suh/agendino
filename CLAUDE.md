@@ -42,8 +42,8 @@ in the request.
 
 - **Configure:** `cp .env.example .env` then set `GEMINI_API_KEY` (and any others). Common variables
   are documented in `.env.example`; advanced ones (`WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE`,
-  `DIARIZATION_MODEL`, `LOCAL_EMBEDDING_*`, `CELERY_BROKER_URL`, `TASK_LOCK_TTL`) live in the docs —
-  see the footer of `.env.example` for pointers.
+  `DIARIZATION_MODEL`, `LOCAL_EMBEDDING_*`, `CELERY_BROKER_URL`, `CELERY_TASK_TIME_LIMIT`,
+  `TASK_LOCK_TTL`) live in the docs — see the footer of `.env.example` for pointers.
 - **Local dev:** `cd src && fastapi dev main.py` (serves on :8000). Background jobs also need Redis +
   a worker: `cd src && celery -A celery_tasks worker --loglevel=info` (see `docs/celery-guide.md`).
 - **Docker:** `docker compose up -d --build`. GPU Whisper: set `GPU=1` in `.env` (or

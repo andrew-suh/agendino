@@ -263,8 +263,10 @@ const _cancelledTasks = new Set();      // task_ids cancelled from this page (en
 let _activeSummarizeNames = new Set();  // recording names with an in-flight summarization
 
 // Poll a queued Celery task until it finishes. Resolves with the SUCCESS result;
-// throws on FAILURE, cancellation (err.cancelled = true), or timeout.
-async function pollTaskStatus(taskId, { interval = 5000, maxAttempts = 720 } = {}) {
+// throws on FAILURE, cancellation (err.cancelled = true), or timeout. The window
+// (4h) must outlive the Celery task time limit incl. retries, or the poll gives
+// up while the task is still running and its terminal state never reaches the UI.
+async function pollTaskStatus(taskId, { interval = 5000, maxAttempts = 2880 } = {}) {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const res = await fetch(`${TASK_STATUS_URL}/${encodeURIComponent(taskId)}`);
         const data = await res.json();

@@ -4,10 +4,11 @@ Celery tasks for long-running operations like transcription and summarization
 import logging
 
 from celery import Task
+from celery.exceptions import SoftTimeLimitExceeded
 
 import task_locks
 from app.depends import get_dashboard_controller, get_sqlite_db_repository
-from celery_config import celery_app
+from celery_config import celery_app, TASK_SOFT_TIME_LIMIT
 from services.WhisperTranscriptionService import DiarizationSetupError
 
 logger = logging.getLogger(__name__)
@@ -16,9 +17,10 @@ logger = logging.getLogger(__name__)
 class DatabaseTask(Task):
     """Base task class that builds the DashboardController and cleans up task locks."""
     autoretry_for = (Exception,)
-    # Setup errors (gated HF model terms not accepted, missing token) won't fix
-    # themselves on retry — fail immediately instead of re-running transcription 3x.
-    dont_autoretry_for = (DiarizationSetupError,)
+    # Setup errors (gated HF model terms not accepted, missing token) and soft
+    # time-limit kills won't fix themselves on retry — fail immediately instead
+    # of re-running transcription 3x (a timed-out job just times out again).
+    dont_autoretry_for = (DiarizationSetupError, SoftTimeLimitExceeded)
     retry_kwargs = {"max_retries": 3, "countdown": 5}
     retry_backoff = True
 
@@ -46,7 +48,14 @@ class DatabaseTask(Task):
         return None
 
     def after_return(self, status, retval, task_id, args, kwargs, einfo):
-        """Terminal handler (success or retry-exhausted failure): release the lock."""
+        """Clean up on terminal returns (success or retry-exhausted failure).
+
+        Runs after EVERY return, including RETRY — skip those, or the lock is
+        released while the task is still re-running under the same task_id and
+        /tasks/active loses track of it.
+        """
+        if status == "RETRY":
+            return
         key = self._lock_key_for(args, kwargs)
         if key:
             task_locks.release(key)
@@ -92,6 +101,13 @@ def transcribe_audio_task(self, recording_name: str, engine: str = "gemini"):
             logger.error(f"Transcription failed for {recording_name}: {result.get('error')}")
             raise Exception(result.get("error", "Transcription failed"))
 
+    except SoftTimeLimitExceeded:
+        # Re-raise with the same type (skips autoretry) but a message the UI can show.
+        logger.error(f"Transcription of {recording_name} hit the Celery soft time limit")
+        raise SoftTimeLimitExceeded(
+            f"Transcription timed out after {TASK_SOFT_TIME_LIMIT}s — for long recordings, "
+            "raise CELERY_TASK_TIME_LIMIT (see docs/celery-guide.md)"
+        )
     except Exception as e:
         logger.error(f"Task error during transcription of {recording_name}: {str(e)}")
         raise

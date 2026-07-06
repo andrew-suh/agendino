@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime
 
+from celery.exceptions import SoftTimeLimitExceeded
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
@@ -381,8 +382,9 @@ class DashboardController:
 
         try:
             transcript = svc.transcribe(audio_path, mime_type=mime_type)
-        except DiarizationSetupError:
-            # Propagate with its type intact so the Celery layer can skip autoretry.
+        except (DiarizationSetupError, SoftTimeLimitExceeded):
+            # Propagate with the type intact so the Celery layer can skip autoretry:
+            # neither a setup error nor a timeout will fix itself on a re-run.
             raise
         except Exception as e:
             return {"ok": False, "error": f"Transcription failed: {str(e)}"}
@@ -461,6 +463,8 @@ class DashboardController:
             result = self._summarization_service.summarize(
                 transcript, prompt_content, recording_datetime=recording_datetime
             )
+        except SoftTimeLimitExceeded:
+            raise  # keep the type so the Celery layer skips autoretry
         except Exception as e:
             return {"ok": False, "error": f"Summarization failed: {str(e)}"}
 
@@ -659,6 +663,8 @@ class DashboardController:
                 summary_text=summary.summary,
                 summary_title=summary.title,
             )
+        except SoftTimeLimitExceeded:
+            raise  # keep the type so the Celery layer skips autoretry
         except Exception as e:
             return {"ok": False, "error": f"Task generation failed: {str(e)}"}
 

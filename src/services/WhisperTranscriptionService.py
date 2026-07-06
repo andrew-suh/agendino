@@ -13,8 +13,9 @@ DIARIZATION_SETUP_HINT = (
 
 
 class DiarizationSetupError(RuntimeError):
-    """Diarization can't run due to configuration (missing token, gated-model terms
-    not accepted, model not cached). Retrying won't help — Celery must not autoretry."""
+    """Diarization can't run due to configuration or environment (missing token,
+    gated-model terms not accepted, model not cached, incompatible pyannote.audio
+    version). Retrying won't help — Celery must not autoretry."""
 
 
 def merge_words_with_speakers(words, turns):
@@ -173,7 +174,17 @@ class WhisperTranscriptionService:
 
         pipeline = self._get_diarization_pipeline()
         waveform = torch.from_numpy(audio).unsqueeze(0)
-        annotation = pipeline({"waveform": waveform, "sample_rate": 16000})
+        result = pipeline({"waveform": waveform, "sample_rate": 16000})
+        # pyannote.audio 3.x returns the Annotation directly; 4.x wraps it in a
+        # DiarizeOutput whose Annotation lives on .speaker_diarization.
+        annotation = getattr(result, "speaker_diarization", result)
+        if not hasattr(annotation, "itertracks"):
+            raise DiarizationSetupError(
+                f"Diarization returned an unsupported output type "
+                f"'{type(result).__name__}' — the installed pyannote.audio version is "
+                "incompatible with this code. Pin pyannote.audio to a supported "
+                "version (3.x or 4.x) and rebuild."
+            )
         return [
             (segment.start, segment.end, label)
             for segment, _, label in annotation.itertracks(yield_label=True)

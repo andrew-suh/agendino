@@ -152,6 +152,40 @@ class TestDiarizationPipelineLoad:
         assert service._get_diarization_pipeline() is pipeline  # cached, no reload
 
 
+class TestDiarize:
+    """_diarize must handle both pyannote.audio 3.x (Annotation) and 4.x
+    (DiarizeOutput wrapper) pipeline outputs."""
+
+    def _make_service_with_pipeline(self, monkeypatch, pipeline_output):
+        torch_mod = types.SimpleNamespace(from_numpy=MagicMock(return_value=MagicMock()))
+        monkeypatch.setitem(sys.modules, "torch", torch_mod)
+        service = make_service(diarization_enabled=True, hf_token="hf_x")
+        service._diarization_pipeline = lambda inputs: pipeline_output
+        return service
+
+    def _annotation(self):
+        # Plain namespace, not MagicMock: a mock would auto-create
+        # .speaker_diarization and defeat the 3.x/4.x detection.
+        segment = types.SimpleNamespace(start=0.0, end=1.5)
+        return types.SimpleNamespace(
+            itertracks=lambda yield_label: [(segment, None, "SPEAKER_00")]
+        )
+
+    def test_pyannote3_annotation_output(self, monkeypatch):
+        service = self._make_service_with_pipeline(monkeypatch, self._annotation())
+        assert service._diarize(MagicMock()) == [(0.0, 1.5, "SPEAKER_00")]
+
+    def test_pyannote4_diarize_output(self, monkeypatch):
+        wrapped = types.SimpleNamespace(speaker_diarization=self._annotation())
+        service = self._make_service_with_pipeline(monkeypatch, wrapped)
+        assert service._diarize(MagicMock()) == [(0.0, 1.5, "SPEAKER_00")]
+
+    def test_unsupported_output_raises_setup_error(self, monkeypatch):
+        service = self._make_service_with_pipeline(monkeypatch, object())
+        with pytest.raises(DiarizationSetupError, match="unsupported output type"):
+            service._diarize(MagicMock())
+
+
 class TestDeviceResolution:
     def test_explicit_device_wins(self):
         service = make_service(diarization_device="cpu")

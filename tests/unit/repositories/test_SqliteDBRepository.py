@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 from random import randint
 
+import numpy as np
 import pytest
 
 from models.DBRecording import DBRecording
@@ -74,6 +75,120 @@ class TestSqliteDBRepository:
     def test_get_transcript_not_found(self, db):
         result = db.get_transcript("nonexistent")
         assert result is None
+
+    def test_save_and_get_recording_speakers(self, db, sample_recording):
+        db.insert_recording(sample_recording)
+        speakers = [
+            {
+                "label": "Speaker 1",
+                "embedding": np.array([0.6, 0.8], dtype=np.float32),
+                "model_id": "pyannote/wespeaker-voxceleb-resnet34-LM",
+                "speech_seconds": 12.5,
+            },
+            {
+                "label": "Speaker 2",
+                "embedding": [0.0, 1.0],  # plain lists must round-trip too
+                "model_id": "pyannote/wespeaker-voxceleb-resnet34-LM",
+                "speech_seconds": 7.0,
+            },
+        ]
+        db.save_recording_speakers(sample_recording.name, speakers)
+
+        stored = db.get_recording_speakers(sample_recording.name)
+        assert [s["label"] for s in stored] == ["Speaker 1", "Speaker 2"]
+        assert np.allclose(stored[0]["embedding"], [0.6, 0.8])
+        assert stored[0]["embedding"].dtype == np.float32
+        assert stored[0]["model_id"] == "pyannote/wespeaker-voxceleb-resnet34-LM"
+        assert stored[0]["speech_seconds"] == 12.5
+
+    def test_save_recording_speakers_replaces_previous(self, db, sample_recording):
+        db.insert_recording(sample_recording)
+        db.save_recording_speakers(
+            sample_recording.name,
+            [{"label": "Speaker 1", "embedding": [1.0], "model_id": "old"}],
+        )
+        db.save_recording_speakers(
+            sample_recording.name,
+            [{"label": "Speaker 1", "embedding": [2.0], "model_id": "new"}],
+        )
+        stored = db.get_recording_speakers(sample_recording.name)
+        assert len(stored) == 1
+        assert stored[0]["model_id"] == "new"
+
+    def test_save_recording_speakers_unknown_recording_is_noop(self, db):
+        db.save_recording_speakers(
+            "ghost", [{"label": "Speaker 1", "embedding": [1.0], "model_id": "m"}]
+        )
+        assert db.get_recording_speakers("ghost") == []
+
+    def test_clear_transcript_removes_voiceprints(self, db, sample_recording):
+        db.insert_recording(sample_recording)
+        db.save_transcript(sample_recording.name, "text")
+        db.save_recording_speakers(
+            sample_recording.name,
+            [{"label": "Speaker 1", "embedding": [1.0], "model_id": "m"}],
+        )
+
+        assert db.clear_transcript(sample_recording.name) is True
+        assert db.get_recording_speakers(sample_recording.name) == []
+
+    def test_rename_recording_speaker_label(self, db, sample_recording):
+        db.insert_recording(sample_recording)
+        db.save_recording_speakers(
+            sample_recording.name,
+            [{"label": "Speaker 1", "embedding": [1.0], "model_id": "m"}],
+        )
+
+        db.rename_recording_speaker_label(sample_recording.name, "Speaker 1", "Andrew")
+        assert [s["label"] for s in db.get_recording_speakers(sample_recording.name)] == ["Andrew"]
+
+    def test_get_latest_voiceprint_model_id(self, db, sample_recording):
+        assert db.get_latest_voiceprint_model_id() is None
+
+        db.insert_recording(sample_recording)
+        db.save_recording_speakers(
+            sample_recording.name,
+            [{"label": "Speaker 1", "embedding": [1.0], "model_id": "old-model"}],
+        )
+        assert db.get_latest_voiceprint_model_id() == "old-model"
+
+        db.save_recording_speakers(
+            sample_recording.name,
+            [{"label": "Speaker 1", "embedding": [1.0], "model_id": "new-model"}],
+        )
+        assert db.get_latest_voiceprint_model_id() == "new-model"
+
+    def test_speaker_profile_crud(self, db):
+        profile_id = db.insert_speaker_profile("Andrew", np.array([0.6, 0.8], dtype=np.float32), "m1")
+        assert profile_id is not None
+
+        profile = db.get_speaker_profile_by_name("Andrew")
+        assert profile["id"] == profile_id
+        assert np.allclose(profile["embedding"], [0.6, 0.8])
+        assert profile["model_id"] == "m1"
+        assert profile["enrollment_count"] == 1
+
+        db.update_speaker_profile(profile_id, [0.0, 1.0], "m2", 3)
+        updated = db.get_speaker_profile_by_name("Andrew")
+        assert np.allclose(updated["embedding"], [0.0, 1.0])
+        assert updated["model_id"] == "m2"
+        assert updated["enrollment_count"] == 3
+
+        assert db.delete_speaker_profile(profile_id) is True
+        assert db.get_speaker_profile_by_name("Andrew") is None
+        assert db.delete_speaker_profile(profile_id) is False
+
+    def test_get_speaker_profiles_sorted_by_name(self, db):
+        db.insert_speaker_profile("Zoe", [1.0], "m")
+        db.insert_speaker_profile("Andrew", [1.0], "m")
+        assert [p["name"] for p in db.get_speaker_profiles()] == ["Andrew", "Zoe"]
+
+    def test_speaker_profile_name_is_unique(self, db):
+        import sqlite3
+
+        db.insert_speaker_profile("Andrew", [1.0], "m")
+        with pytest.raises(sqlite3.IntegrityError):
+            db.insert_speaker_profile("Andrew", [2.0], "m")
 
     def test_save_and_get_summary(self, db, sample_recording):
         db.insert_recording(sample_recording)

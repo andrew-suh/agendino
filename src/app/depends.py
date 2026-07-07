@@ -80,6 +80,9 @@ def get_whisper_transcription_service() -> WhisperTranscriptionService:
         hf_token=_config.get("HF_TOKEN"),
         diarization_model=_config.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1"),
         diarization_device=_config.get("DIARIZATION_DEVICE") or _config.get("WHISPER_DEVICE", "auto"),
+        speaker_id_enabled=_config.get("SPEAKER_ID_ENABLED", "false").lower() in ("true", "1", "yes"),
+        speaker_id_threshold=float(_config.get("SPEAKER_ID_THRESHOLD", "0.5")),
+        speaker_id_margin=float(_config.get("SPEAKER_ID_MARGIN", "0.05")),
     )
 
 

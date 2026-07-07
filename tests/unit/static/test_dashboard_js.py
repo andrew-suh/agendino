@@ -90,6 +90,49 @@ def test_cancel_transcription_resets_stale_status(dashboard_js):
     )
 
 
+def test_speaker_editor_offers_voice_enrollment(dashboard_js):
+    """Rows for original "Speaker N" labels must render the Remember-voice
+    checkbox; voiceprints are stored under those labels, so enrollment is
+    impossible for already-renamed speakers."""
+    body = extract_function_body(dashboard_js, "renderSpeakerEditor")
+    assert "transcript-speaker-enroll" in body, (
+        "renderSpeakerEditor must render the transcript-speaker-enroll checkbox"
+    )
+    assert re.search(r"\^Speaker \\d\+\$", body), (
+        "the enroll checkbox must be limited to original 'Speaker N' labels"
+    )
+
+
+def test_apply_handler_reads_enroll_checkboxes_before_rerender(dashboard_js):
+    """renderSpeakerEditor() wipes the checkbox states; the apply handler must
+    collect enrollments before re-rendering or 'Remember voice' silently does
+    nothing."""
+    read_pos = dashboard_js.index(".transcript-speaker-enroll[data-label=")
+    rerender_pos = dashboard_js.index("renderSpeakerEditor(newTranscript)")
+    assert read_pos < rerender_pos, (
+        "the apply handler must read the enroll checkboxes before calling "
+        "renderSpeakerEditor(newTranscript), which destroys them"
+    )
+    assert re.search(r"/enroll`?\s*,\s*{\s*method:\s*\"POST\"", dashboard_js), (
+        "checked speakers must be enrolled via POST /speakers/enroll"
+    )
+
+
+def test_voices_modal_can_apply_profiles_retroactively(dashboard_js):
+    """The Voices modal's apply button must POST /speakers/apply so past
+    transcripts get renamed, and must ask for confirmation first (it rewrites
+    stored transcripts)."""
+    assert re.search(r"/apply`?\s*,\s*{\s*method:\s*\"POST\"", dashboard_js), (
+        "the voices-apply button must POST to /speakers/apply"
+    )
+    apply_pos = dashboard_js.index("voicesApplyBtn.addEventListener")
+    confirm_pos = dashboard_js.index("confirm(", apply_pos)
+    fetch_pos = dashboard_js.index("/apply`", apply_pos)
+    assert confirm_pos < fetch_pos, (
+        "the retroactive apply must be confirmed before the POST fires"
+    )
+
+
 def test_transcribing_row_has_stop_button(dashboard_js):
     """The in-flight row indicator is a disabled button; without a companion
     stop button there is no UI path to DELETE /tasks/status/{task_id}."""

@@ -3,6 +3,8 @@ import logging
 import os
 import sqlite3
 
+import numpy as np
+
 from models.DBCalendarEvent import DBCalendarEvent
 from models.DBDailyRecap import DBDailyRecap
 from models.DBRecording import DBRecording
@@ -31,6 +33,7 @@ class SqliteDBRepository:
         if self._db_path not in SqliteDBRepository._migrated_paths:
             self._ensure_recording_columns()
             self._ensure_recording_indexes()
+            self._ensure_speaker_tables()
             SqliteDBRepository._migrated_paths.add(self._db_path)
 
     def _connect(self) -> sqlite3.Connection:
@@ -77,6 +80,48 @@ class SqliteDBRepository:
             except Exception:
                 conn.execute("ALTER TABLE recording ADD COLUMN transcription_status TEXT NOT NULL DEFAULT 'idle'")
                 conn.commit()
+        finally:
+            conn.close()
+
+    def _ensure_speaker_tables(self) -> None:
+        """Migration: per-recording speaker voiceprints (Phase 1 of speaker identification)."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recording_speaker
+                (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recording_id   INTEGER NOT NULL,
+                    speaker_label  TEXT    NOT NULL,
+                    embedding      BLOB    NOT NULL,
+                    model_id       TEXT    NOT NULL,
+                    speech_seconds REAL    NOT NULL DEFAULT 0,
+                    created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+                    FOREIGN KEY (recording_id) REFERENCES recording (id) ON DELETE CASCADE,
+                    UNIQUE (recording_id, speaker_label)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recording_speaker_recording "
+                "ON recording_speaker (recording_id)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS speaker_profile
+                (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name             TEXT    NOT NULL UNIQUE,
+                    embedding        BLOB    NOT NULL,
+                    model_id         TEXT    NOT NULL,
+                    enrollment_count INTEGER NOT NULL DEFAULT 1,
+                    created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+                    updated_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            conn.commit()
         finally:
             conn.close()
 
@@ -226,10 +271,164 @@ class SqliteDBRepository:
         """Remove a recording's transcript and reset its status so it can be re-transcribed."""
         conn = self._connect()
         try:
+            # Voiceprints derive from the deleted transcript's diarization run.
+            conn.execute(
+                "DELETE FROM recording_speaker WHERE recording_id = "
+                "(SELECT id FROM recording WHERE name = ?)",
+                (name,),
+            )
             result = conn.execute(
                 "UPDATE recording SET transcript = NULL, transcription_status = 'idle' WHERE name = ?",
                 (name,),
             )
+            conn.commit()
+            return result.rowcount > 0
+        finally:
+            conn.close()
+
+    def save_recording_speakers(self, name: str, speakers: list[dict]) -> None:
+        """Replace the stored per-speaker voiceprints for a recording.
+
+        speakers: [{"label": str, "embedding": array-like float32, "model_id": str,
+        "speech_seconds": float}] — labels are the transcript's display names
+        ("Speaker N") so enrollment can reference them directly.
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT id FROM recording WHERE name = ?", (name,)).fetchone()
+            if row is None:
+                return
+            recording_id = row["id"]
+            conn.execute("DELETE FROM recording_speaker WHERE recording_id = ?", (recording_id,))
+            conn.executemany(
+                "INSERT INTO recording_speaker (recording_id, speaker_label, embedding, model_id, speech_seconds) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (
+                        recording_id,
+                        s["label"],
+                        np.asarray(s["embedding"], dtype=np.float32).tobytes(),
+                        s["model_id"],
+                        float(s.get("speech_seconds", 0.0)),
+                    )
+                    for s in speakers
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_recording_speakers(self, name: str) -> list[dict]:
+        """Stored voiceprints for a recording, embeddings as float32 numpy arrays."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT rs.speaker_label, rs.embedding, rs.model_id, rs.speech_seconds "
+                "FROM recording_speaker rs JOIN recording r ON r.id = rs.recording_id "
+                "WHERE r.name = ? ORDER BY rs.speaker_label",
+                (name,),
+            ).fetchall()
+            return [
+                {
+                    "label": row["speaker_label"],
+                    "embedding": np.frombuffer(row["embedding"], dtype=np.float32),
+                    "model_id": row["model_id"],
+                    "speech_seconds": row["speech_seconds"],
+                }
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def rename_recording_speaker_label(self, name: str, old_label: str, new_label: str) -> None:
+        """Re-key a stored voiceprint after its speaker was renamed in the transcript."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE recording_speaker SET speaker_label = ? WHERE speaker_label = ? "
+                "AND recording_id = (SELECT id FROM recording WHERE name = ?)",
+                (new_label, old_label, name),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_latest_voiceprint_model_id(self) -> str | None:
+        """model_id of the most recently stored voiceprint — i.e. what the current
+        worker configuration actually produces (the web process can't compute this
+        itself without loading the pyannote pipeline)."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT model_id FROM recording_speaker ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            return row["model_id"] if row else None
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _profile_row_to_dict(row) -> dict:
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "embedding": np.frombuffer(row["embedding"], dtype=np.float32),
+            "model_id": row["model_id"],
+            "enrollment_count": row["enrollment_count"],
+            "created_at": row["created_at"],
+        }
+
+    def get_speaker_profiles(self) -> list[dict]:
+        """All enrolled voice profiles, embeddings as float32 numpy arrays."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, name, embedding, model_id, enrollment_count, created_at "
+                "FROM speaker_profile ORDER BY name"
+            ).fetchall()
+            return [self._profile_row_to_dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_speaker_profile_by_name(self, name: str) -> dict | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT id, name, embedding, model_id, enrollment_count, created_at "
+                "FROM speaker_profile WHERE name = ?",
+                (name,),
+            ).fetchone()
+            return self._profile_row_to_dict(row) if row else None
+        finally:
+            conn.close()
+
+    def insert_speaker_profile(self, name: str, embedding, model_id: str) -> int:
+        conn = self._connect()
+        try:
+            result = conn.execute(
+                "INSERT INTO speaker_profile (name, embedding, model_id) VALUES (?, ?, ?)",
+                (name, np.asarray(embedding, dtype=np.float32).tobytes(), model_id),
+            )
+            conn.commit()
+            return result.lastrowid
+        finally:
+            conn.close()
+
+    def update_speaker_profile(self, profile_id: int, embedding, model_id: str, enrollment_count: int) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE speaker_profile SET embedding = ?, model_id = ?, enrollment_count = ?, "
+                "updated_at = datetime('now') WHERE id = ?",
+                (np.asarray(embedding, dtype=np.float32).tobytes(), model_id, enrollment_count, profile_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_speaker_profile(self, profile_id: int) -> bool:
+        conn = self._connect()
+        try:
+            result = conn.execute("DELETE FROM speaker_profile WHERE id = ?", (profile_id,))
             conn.commit()
             return result.rowcount > 0
         finally:

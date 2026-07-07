@@ -227,6 +227,9 @@
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <h6 class="mb-0">Rename speakers</h6>
                         <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-sm btn-outline-info" id="transcript-voices-btn" title="Manage enrolled voice profiles">
+                                <i class="bi bi-person-badge"></i> Voices
+                            </button>
                             <button type="button" class="btn btn-sm btn-outline-secondary" id="transcript-reset-speakers-btn" title="Reset all speaker names to original">
                                 <i class="bi bi-arrow-counterclockwise"></i> Reset
                             </button>
@@ -473,10 +476,34 @@
             </div>
         </div>
     </div>
+
+    <!-- Voice Profiles Modal -->
+    <div id="voices-modal-backdrop" class="transcript-modal-backdrop d-none">
+        <div class="transcript-modal" style="max-width: 500px;">
+            <div class="transcript-modal-header" style="background: var(--bs-info);">
+                <h5 class="mb-0"><i class="bi bi-person-badge me-2"></i>Voice Profiles</h5>
+                <button type="button" class="btn-close btn-close-white" id="voices-modal-close"></button>
+            </div>
+            <div class="transcript-modal-body">
+                <p class="text-muted small mb-3">
+                    Enrolled voices, stored locally. To add one, rename a speaker in a transcript
+                    and tick "Remember voice". Enrolling the same name again refines the profile.
+                </p>
+                <div id="voices-list"></div>
+                <div class="text-end mt-3">
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="voices-apply-btn"
+                            title="Re-check past transcripts against enrolled voices and name confidently matching speakers">
+                        <i class="bi bi-magic"></i> Apply to past recordings
+                    </button>
+                </div>
+                <div id="voices-modal-feedback" class="small mt-2 d-none"></div>
+            </div>
+        </div>
+    </div>
 {% endblock %}
 
 {% block extra_js %}
 <script src="/static/hidock-device.js?v=1"></script>
     <script>window.UPLOAD_CONCURRENCY = {{ upload_concurrency | default(4) }};</script>
-    <script src="/static/dashboard.js?v=12"></script>
+    <script src="/static/dashboard.js?v=14"></script>
 {% endblock %}

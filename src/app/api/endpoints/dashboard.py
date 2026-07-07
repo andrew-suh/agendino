@@ -18,6 +18,7 @@ from models.dto.GenerateTasksRequestDTO import GenerateTasksRequestDTO
 from models.dto.MoveRecordingRequestDTO import MoveRecordingRequestDTO, BulkMoveRecordingsRequestDTO
 from models.dto.PublishRequestDTO import PublishRequestDTO
 from models.dto.SummarizeRequestDTO import SummarizeRequestDTO
+from models.dto.EnrollSpeakerRequestDTO import EnrollSpeakerRequestDTO
 from models.dto.TranscribeRequestDTO import TranscribeRequestDTO
 from models.dto.UpdateRecordingRequestDTO import UpdateRecordingRequestDTO
 from models.dto.UpdateSummaryRequestDTO import UpdateSummaryRequestDTO
@@ -112,6 +113,43 @@ def reset_transcription_status(
         }
     dashboard_controller.set_transcription_status(bare, "idle")
     return {"ok": True, "message": f"Transcription status reset for {bare}"}
+
+
+# ─── Speaker profiles (voice enrollment) ─────────────────────────
+# NOTE: the literal /speakers/enroll route is declared before /speakers/{profile_id}.
+
+
+@router.get("/speakers")
+def list_speakers(
+    dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
+):
+    return dashboard_controller.list_speaker_profiles()
+
+
+@router.post("/speakers/enroll")
+def enroll_speaker(
+    body: EnrollSpeakerRequestDTO,
+    dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
+):
+    return dashboard_controller.enroll_speaker(
+        body.recording_name, body.speaker_label, body.person_name
+    )
+
+
+@router.post("/speakers/apply")
+def apply_speakers(
+    dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
+):
+    """Retroactively name anonymous speakers in past transcripts from enrolled voices."""
+    return dashboard_controller.apply_speaker_profiles()
+
+
+@router.delete("/speakers/{profile_id}")
+def delete_speaker(
+    profile_id: int,
+    dashboard_controller: DashboardController = Depends(depends.get_dashboard_controller),
+):
+    return dashboard_controller.delete_speaker_profile(profile_id)
 
 
 @router.get("/transcript/{name}")

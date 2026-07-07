@@ -20,6 +20,7 @@ const TASKS_GENERATE_URL = "/api/dashboard/tasks/generate";
 const TASKS_URL = "/api/dashboard/tasks";
 const TASK_STATUS_URL = "/api/dashboard/tasks/status";
 const TASKS_ACTIVE_URL = "/api/dashboard/tasks/active";
+const SPEAKERS_URL = "/api/dashboard/speakers";
 const UPLOAD_URL = "/api/dashboard/upload";
 // Max uploads in flight at once. Injected by the server from WEB_CONCURRENCY (the
 // uvicorn worker count) so client concurrency matches what the server can process
@@ -1533,12 +1534,16 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        transcriptSpeakerList.innerHTML = speakers.map((name) => `
+        transcriptSpeakerList.innerHTML = speakers.map((name, i) => {
+            // Voiceprints are stored under the original "Speaker N" labels, so
+            // enrollment is only offered for those (not already-renamed speakers).
+            const canEnroll = /^Speaker \d+$/.test(name);
+            return `
             <div class="row g-2 align-items-center mb-2">
-                <div class="col-md-5">
+                <div class="col-md-4">
                     <span class="small text-muted">${escapeHtml(name)}</span>
                 </div>
-                <div class="col-md-7">
+                <div class="col-md-5">
                     <input
                         type="text"
                         class="form-control form-control-sm transcript-speaker-input"
@@ -1547,8 +1552,16 @@ document.addEventListener("DOMContentLoaded", () => {
                         placeholder="Speaker name"
                     />
                 </div>
+                <div class="col-md-3">
+                    ${canEnroll ? `
+                    <div class="form-check mb-0" title="Save this voice under the new name so future recordings can recognize it">
+                        <input class="form-check-input transcript-speaker-enroll" type="checkbox" id="speaker-enroll-${i}" data-label="${escapeHtml(name)}">
+                        <label class="form-check-label small text-muted" for="speaker-enroll-${i}">Remember voice</label>
+                    </div>` : ""}
+                </div>
             </div>
-        `).join("");
+        `;
+        }).join("");
         show(transcriptSpeakerEditor);
     }
 
@@ -1879,17 +1892,23 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (transcriptApplySpeakersBtn) {
-        transcriptApplySpeakersBtn.addEventListener("click", (e) => {
+        transcriptApplySpeakersBtn.addEventListener("click", async (e) => {
             e.preventDefault();
             if (!transcriptSpeakerList || !transcriptEditor) return;
 
             const inputs = Array.from(transcriptSpeakerList.querySelectorAll(".transcript-speaker-input"));
             const renames = {};
+            const enrollments = [];
             for (const input of inputs) {
                 const original = (input.dataset.original || "").trim();
                 const nextName = (input.value || "").trim();
                 if (original && nextName && nextName !== original) {
                     renames[original] = nextName;
+                    // Read the checkbox now: the re-render below wipes it.
+                    const cb = transcriptSpeakerList.querySelector(
+                        `.transcript-speaker-enroll[data-label="${CSS.escape(original)}"]`
+                    );
+                    if (cb && cb.checked) enrollments.push({ speaker_label: original, person_name: nextName });
                 }
             }
 
@@ -1908,9 +1927,30 @@ document.addEventListener("DOMContentLoaded", () => {
             // Re-render speaker editor with updated names
             renderSpeakerEditor(newTranscript);
 
+            // Enroll "Remember voice" speakers against the recording's stored voiceprints.
+            const notes = [`✓ Applied ${Object.keys(renames).length} speaker rename(s)`];
+            if (enrollments.length && currentTranscriptName) {
+                for (const en of enrollments) {
+                    try {
+                        const res = await fetch(`${SPEAKERS_URL}/enroll`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ recording_name: currentTranscriptName, ...en }),
+                        });
+                        const data = await res.json();
+                        notes.push(data.ok
+                            ? `✓ Voice saved for ${en.person_name}`
+                            : `✗ ${en.person_name}: ${data.error || "enrollment failed"}`);
+                    } catch (err) {
+                        notes.push(`✗ ${en.person_name}: ${err.message}`);
+                    }
+                }
+            }
+
             // Show feedback
-            transcriptSaveFeedback.className = "small mt-2 text-success";
-            transcriptSaveFeedback.textContent = `✓ Applied ${Object.keys(renames).length} speaker rename(s)`;
+            const failed = notes.some((n) => n.startsWith("✗"));
+            transcriptSaveFeedback.className = `small mt-2 ${failed ? "text-warning" : "text-success"}`;
+            transcriptSaveFeedback.textContent = notes.join(" · ");
             show(transcriptSaveFeedback);
 
             // Scroll editor to top to show changes
@@ -1932,6 +1972,104 @@ document.addEventListener("DOMContentLoaded", () => {
             transcriptSaveFeedback.className = "small mt-2 text-info";
             transcriptSaveFeedback.textContent = "Speaker names reset";
             show(transcriptSaveFeedback);
+        });
+    }
+
+    // ─── Voice profiles modal ─────────────────────────────────────
+    const voicesModalBackdrop = $("#voices-modal-backdrop");
+    const voicesModalClose = $("#voices-modal-close");
+    const voicesList = $("#voices-list");
+    const voicesFeedback = $("#voices-modal-feedback");
+    const transcriptVoicesBtn = $("#transcript-voices-btn");
+
+    async function loadVoiceProfiles() {
+        if (!voicesList) return;
+        voicesList.innerHTML = '<p class="text-muted small mb-0">Loading…</p>';
+        try {
+            const res = await fetch(SPEAKERS_URL);
+            const data = await res.json();
+            if (!data.ok) throw new Error(data.error || "Failed to load voice profiles");
+            if (!data.speakers.length) {
+                voicesList.innerHTML = '<p class="text-muted small mb-0">No voices enrolled yet. '
+                    + 'Rename a speaker in a transcript and tick "Remember voice".</p>';
+                return;
+            }
+            voicesList.innerHTML = data.speakers.map((s) => `
+                <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+                    <div>
+                        <span class="fw-bold">${escapeHtml(s.name)}</span>
+                        <span class="text-muted small ms-2">${s.enrollment_count} enrollment${s.enrollment_count === 1 ? "" : "s"}</span>
+                        ${s.stale ? '<span class="badge bg-warning text-dark ms-2" title="Enrolled with a different embedding model than current transcriptions use — this profile can\'t match until re-enrolled">re-enroll needed</span>' : ""}
+                    </div>
+                    <button class="btn btn-sm btn-outline-danger btn-delete-voice" data-id="${s.id}" data-name="${escapeHtml(s.name)}" title="Delete voice profile">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            `).join("");
+        } catch (err) {
+            voicesList.innerHTML = `<p class="text-danger small mb-0">${escapeHtml(err.message)}</p>`;
+        }
+    }
+
+    if (transcriptVoicesBtn) {
+        transcriptVoicesBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            if (voicesFeedback) hide(voicesFeedback);
+            show(voicesModalBackdrop);
+            loadVoiceProfiles();
+        });
+    }
+    if (voicesModalClose) {
+        voicesModalClose.addEventListener("click", () => hide(voicesModalBackdrop));
+    }
+    if (voicesModalBackdrop) {
+        voicesModalBackdrop.addEventListener("click", (e) => {
+            if (e.target === voicesModalBackdrop) hide(voicesModalBackdrop);
+        });
+    }
+    if (voicesList) {
+        voicesList.addEventListener("click", async (e) => {
+            const btn = e.target.closest(".btn-delete-voice");
+            if (!btn) return;
+            if (!confirm(`Delete the voice profile for "${btn.dataset.name}"?`)) return;
+            try {
+                const res = await fetch(`${SPEAKERS_URL}/${encodeURIComponent(btn.dataset.id)}`, { method: "DELETE" });
+                const data = await res.json();
+                if (!data.ok) throw new Error(data.error || "Delete failed");
+                await loadVoiceProfiles();
+            } catch (err) {
+                if (voicesFeedback) {
+                    voicesFeedback.className = "small mt-2 text-danger";
+                    voicesFeedback.textContent = err.message;
+                    show(voicesFeedback);
+                }
+            }
+        });
+    }
+
+    const voicesApplyBtn = $("#voices-apply-btn");
+    if (voicesApplyBtn) {
+        voicesApplyBtn.addEventListener("click", async (e) => {
+            e.preventDefault();
+            if (!confirm("Scan past transcripts and rename anonymous speakers that confidently match an enrolled voice?")) return;
+            voicesApplyBtn.disabled = true;
+            try {
+                const res = await fetch(`${SPEAKERS_URL}/apply`, { method: "POST" });
+                const data = await res.json();
+                if (!data.ok) throw new Error(data.error || "Apply failed");
+                const updated = data.updated || [];
+                voicesFeedback.className = "small mt-2 " + (updated.length ? "text-success" : "text-muted");
+                voicesFeedback.textContent = updated.length
+                    ? `✓ Updated ${updated.length} of ${data.checked} recording(s): ${updated.map((u) => u.name).join(", ")}`
+                    : `No new matches in ${data.checked} candidate recording(s)`;
+                show(voicesFeedback);
+            } catch (err) {
+                voicesFeedback.className = "small mt-2 text-danger";
+                voicesFeedback.textContent = err.message;
+                show(voicesFeedback);
+            } finally {
+                voicesApplyBtn.disabled = false;
+            }
         });
     }
 

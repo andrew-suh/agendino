@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime
 
+import numpy as np
 from celery.exceptions import SoftTimeLimitExceeded
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -17,7 +18,14 @@ from repositories.VectorStoreRepository import VectorStoreRepository, build_summ
 from services.SummarizationService import SummarizationService
 from services.TaskGenerationService import TaskGenerationService
 from services.TranscriptionService import TranscriptionService
-from services.WhisperTranscriptionService import DiarizationSetupError, WhisperTranscriptionService
+from services.WhisperTranscriptionService import (
+    ANONYMOUS_SPEAKER_RE,
+    DiarizationSetupError,
+    WhisperTranscriptionService,
+    extract_transcript_speakers,
+    match_speakers_to_profiles,
+    rename_transcript_speakers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -381,14 +389,189 @@ class DashboardController:
             svc = self._transcription_service
 
         try:
-            transcript = svc.transcribe(audio_path, mime_type=mime_type)
+            if engine == "whisper":
+                profiles = []
+                if svc.speaker_id_enabled:
+                    # Best-effort: identification is an enhancement, never a reason
+                    # for a transcription to fail.
+                    try:
+                        profiles = self._sqlite_db_repository.get_speaker_profiles()
+                    except Exception as e:
+                        logger.warning(f"Failed to load voice profiles for speaker ID: {e}")
+                detailed = svc.transcribe_detailed(
+                    audio_path, mime_type=mime_type, speaker_profiles=profiles
+                )
+                transcript = detailed["transcript"]
+                speakers = detailed.get("speakers") or []
+            else:
+                transcript = svc.transcribe(audio_path, mime_type=mime_type)
+                speakers = []
         except (DiarizationSetupError, SoftTimeLimitExceeded):
             raise
         except Exception as e:
             return {"ok": False, "error": f"Transcription failed: {str(e)}"}
 
         self._sqlite_db_repository.save_transcript(bare_name, transcript)
+        if speakers:
+            # Voiceprints for speaker enrollment/identification. Best-effort like
+            # the summary auto-embed: a failure must not fail the transcription.
+            try:
+                self._sqlite_db_repository.save_recording_speakers(bare_name, speakers)
+            except Exception as e:
+                logger.warning(f"Failed to save speaker voiceprints for {bare_name}: {e}")
         return {"ok": True, "transcript": transcript, "cached": False}
+
+    # ─── Speaker profiles (voice enrollment) ─────────────────────────
+
+    def list_speaker_profiles(self) -> dict:
+        profiles = self._sqlite_db_repository.get_speaker_profiles()
+        # A profile is stale when its embedding model differs from what the worker
+        # currently stamps on voiceprints — it will never match until re-enrolled.
+        active_model = self._sqlite_db_repository.get_latest_voiceprint_model_id()
+        return {
+            "ok": True,
+            "speakers": [
+                {
+                    "id": p["id"],
+                    "name": p["name"],
+                    "model_id": p["model_id"],
+                    "enrollment_count": p["enrollment_count"],
+                    "created_at": p["created_at"],
+                    "stale": bool(active_model and p["model_id"] != active_model),
+                }
+                for p in profiles
+            ],
+        }
+
+    def enroll_speaker(self, recording_name: str, speaker_label: str, person_name: str) -> dict:
+        """Create or refine a named voice profile from a recording's stored voiceprint.
+
+        Repeat enrollments under the same name refine the profile with a running
+        mean (better robustness across rooms/devices) — unless the embedding model
+        changed, in which case the old vector is not comparable and the profile
+        restarts from the new voiceprint.
+        """
+        person_name = (person_name or "").strip()
+        speaker_label = (speaker_label or "").strip()
+        if not person_name:
+            return {"ok": False, "error": "Person name must not be empty"}
+
+        bare_name = self._bare_name(recording_name)
+        stored = self._sqlite_db_repository.get_recording_speakers(bare_name)
+        match = next((s for s in stored if s["label"] == speaker_label), None)
+        if match is None:
+            return {
+                "ok": False,
+                "error": (
+                    f"No voiceprint stored for '{speaker_label}' in '{bare_name}'. Voiceprints are "
+                    "captured during local Whisper transcription with diarization — re-transcribe "
+                    "the recording to create them."
+                ),
+            }
+
+        new_vec = np.asarray(match["embedding"], dtype=np.float32)
+        norm = float(np.linalg.norm(new_vec))
+        if norm == 0.0:
+            return {"ok": False, "error": "Stored voiceprint is empty — re-transcribe the recording"}
+        new_vec = new_vec / norm
+
+        existing = self._sqlite_db_repository.get_speaker_profile_by_name(person_name)
+        if existing is None:
+            self._sqlite_db_repository.insert_speaker_profile(person_name, new_vec, match["model_id"])
+            return {"ok": True, "message": f"Voice profile created for '{person_name}'", "enrollment_count": 1}
+
+        old_vec = np.asarray(existing["embedding"], dtype=np.float32)
+        if existing["model_id"] != match["model_id"] or old_vec.shape != new_vec.shape:
+            # Embeddings from different models aren't comparable — restart the profile.
+            self._sqlite_db_repository.update_speaker_profile(existing["id"], new_vec, match["model_id"], 1)
+            return {
+                "ok": True,
+                "message": f"Voice profile for '{person_name}' re-enrolled (embedding model changed)",
+                "enrollment_count": 1,
+            }
+
+        n = int(existing["enrollment_count"])
+        merged = (old_vec * n + new_vec) / (n + 1)
+        merged_norm = float(np.linalg.norm(merged))
+        if merged_norm > 0.0:
+            merged = merged / merged_norm
+        self._sqlite_db_repository.update_speaker_profile(existing["id"], merged, match["model_id"], n + 1)
+        return {
+            "ok": True,
+            "message": f"Voice profile for '{person_name}' updated",
+            "enrollment_count": n + 1,
+        }
+
+    def delete_speaker_profile(self, profile_id: int) -> dict:
+        if self._sqlite_db_repository.delete_speaker_profile(profile_id):
+            return {"ok": True, "message": "Voice profile deleted"}
+        return {"ok": False, "error": "Voice profile not found"}
+
+    def apply_speaker_profiles(self) -> dict:
+        """Retroactively name anonymous speakers in past transcripts.
+
+        For every transcribed recording with stored voiceprints, re-runs the same
+        confident matching as live transcription (threshold + margin, one label per
+        profile) against the current profiles and renames matched "Speaker N" lines.
+        Already-named speakers are never touched, and a match is skipped when the
+        person's name already appears in that transcript (can't tell the two apart).
+        """
+        svc = self._whisper_transcription_service
+        if not svc or not svc.speaker_id_enabled:
+            return {
+                "ok": False,
+                "error": "Speaker identification is not enabled (set SPEAKER_ID_ENABLED=true "
+                         "and LOCAL_DIARIZATION_ENABLED=true)",
+            }
+        profiles = self._sqlite_db_repository.get_speaker_profiles()
+        if not profiles:
+            return {"ok": False, "error": "No voice profiles enrolled"}
+
+        checked = 0
+        updated = []
+        for rec in self._sqlite_db_repository.get_recordings():
+            if not rec.transcript:
+                continue
+            stored = self._sqlite_db_repository.get_recording_speakers(rec.name)
+            anonymous = [s for s in stored if ANONYMOUS_SPEAKER_RE.match(s["label"])]
+            if not anonymous:
+                continue
+            checked += 1
+
+            # Match per embedding model (vectors across models aren't comparable);
+            # in practice one model covers all rows.
+            matches: dict[str, str] = {}
+            for model_id in {s["model_id"] for s in anonymous}:
+                embeddings = {
+                    s["label"]: np.asarray(s["embedding"], dtype=np.float32)
+                    for s in anonymous
+                    if s["model_id"] == model_id
+                }
+                usable = [p for p in profiles if p["model_id"] == model_id]
+                matches.update(match_speakers_to_profiles(
+                    embeddings, usable, svc.speaker_id_threshold, svc.speaker_id_margin
+                ))
+
+            existing = extract_transcript_speakers(rec.transcript)
+            renames = {
+                label: name
+                for label, name in matches.items()
+                if label in existing and name not in existing
+            }
+            if not renames:
+                continue
+
+            new_transcript = rename_transcript_speakers(rec.transcript, renames)
+            self._sqlite_db_repository.update_transcript(rec.name, new_transcript)
+            for old_label, new_label in renames.items():
+                # Keep the stored voiceprint keys in sync with the transcript.
+                self._sqlite_db_repository.rename_recording_speaker_label(
+                    rec.name, old_label, new_label
+                )
+            updated.append({"name": rec.name, "renames": renames})
+            logger.info(f"Applied voice profiles to {rec.name}: {renames}")
+
+        return {"ok": True, "checked": checked, "updated": updated}
 
     def get_audio_file_path(self, name: str) -> tuple[str | None, str]:
         """Return (file_path, file_extension) or (None, '') if not found."""

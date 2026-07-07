@@ -14,6 +14,38 @@ CREATE TABLE IF NOT EXISTS recording
 -- Recording names are the logical key (used for dedup on upload); enforce uniqueness.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recording_name ON recording (name);
 
+-- Per-recording speaker voiceprints from diarization (speaker enrollment/identification).
+-- speaker_label matches the transcript's display names ("Speaker 1", "Speaker 2", …);
+-- embedding is a float32 vector, model_id stamps the embedding model it came from
+-- (embeddings from different models are not comparable).
+CREATE TABLE IF NOT EXISTS recording_speaker
+(
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id   INTEGER NOT NULL,
+    speaker_label  TEXT    NOT NULL,
+    embedding      BLOB    NOT NULL,
+    model_id       TEXT    NOT NULL,
+    speech_seconds REAL    NOT NULL DEFAULT 0,
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (recording_id) REFERENCES recording (id) ON DELETE CASCADE,
+    UNIQUE (recording_id, speaker_label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_recording_speaker_recording ON recording_speaker (recording_id);
+
+-- Enrolled voice profiles: a named person's voiceprint, built from one or more
+-- recording_speaker embeddings (running mean over enrollment_count enrollments).
+CREATE TABLE IF NOT EXISTS speaker_profile
+(
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    name             TEXT    NOT NULL UNIQUE,
+    embedding        BLOB    NOT NULL,
+    model_id         TEXT    NOT NULL,
+    enrollment_count INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS summary
 (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,

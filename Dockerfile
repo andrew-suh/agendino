@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # The CUDA base image ships no Python — install it (Ubuntu 22.04 provides 3.10).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip ffmpeg \
+      python3 python3-pip ffmpeg libpython3.10 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .

@@ -8,8 +8,13 @@ chromadb
 icalendar
 recurring-ical-events
 mutagen
-faster-whisper
-pyannote.audio
+faster-whisper==1.2.1
+ctranslate2==4.8.1
+pyannote.audio==4.0.7
+torch==2.12.1
+torchaudio==2.11.0
+torchcodec==0.14.0
+chromadb==1.5.9
 scikit-learn
 # sentence-transformers omitted (pulls torch ~2-3GB); only needed for EMBEDDING_PROVIDER=local — pip install it for that.
 celery[redis]

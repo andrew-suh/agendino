@@ -24,7 +24,7 @@ Welcome to the AgenDino docs. Use the links below to navigate to any topic.
 
 | Feature | Description |
 |---------|-------------|
-| [Transcription](transcription.md) | Cloud (Gemini) and local (Whisper) speech-to-text |
+| [Transcription](transcription.md) | Cloud (Gemini) and local (Whisper) speech-to-text, with speaker diarization and voice-based speaker identification |
 | [Summarization](summarization.md) | Structured AI summaries with customizable prompts |
 | [Task Generation](task-generation.md) | Extract actionable Jira-style tasks from summaries |
 | [Daily Recap](daily-recap.md) | AI-generated end-of-day narrative from events and meetings |

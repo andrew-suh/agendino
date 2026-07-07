@@ -11,9 +11,17 @@ Full list of REST endpoints. Interactive Swagger UI is available at `http://127.
 | `GET` | `/api/dashboard/recordings` | List all recordings with status |
 | `POST` | `/api/dashboard/upload` | Upload an audio file |
 | `GET` | `/api/dashboard/audio/{name}` | Stream/download an audio file |
-| `POST` | `/api/dashboard/transcribe/{name}` | Transcribe a recording |
+| `POST` | `/api/dashboard/transcribe/{name}` | Transcribe a recording (queues a Celery task) |
+| `POST` | `/api/dashboard/transcribe/{name}/reset` | Clear a stale queued/running transcription status |
 | `GET` | `/api/dashboard/transcript/{name}` | Get stored transcript |
 | `PATCH` | `/api/dashboard/transcript/{name}` | Edit stored transcript |
+| `GET` | `/api/dashboard/tasks/status/{task_id}` | Poll a background task's status |
+| `DELETE` | `/api/dashboard/tasks/status/{task_id}` | Cancel a background task (revoke + cleanup) |
+| `GET` | `/api/dashboard/tasks/active` | List in-flight background tasks (for poll resume) |
+| `GET` | `/api/dashboard/speakers` | List enrolled voice profiles |
+| `POST` | `/api/dashboard/speakers/enroll` | Enroll/refine a voice profile from a recording's speaker |
+| `POST` | `/api/dashboard/speakers/apply` | Retroactively name matching speakers in past transcripts |
+| `DELETE` | `/api/dashboard/speakers/{profile_id}` | Delete a voice profile |
 | `GET` | `/api/dashboard/prompts` | List available system prompts |
 | `POST` | `/api/dashboard/summarize/{name}` | Summarize a recording |
 | `GET` | `/api/dashboard/summaries/{name}` | Get all summaries for a recording |

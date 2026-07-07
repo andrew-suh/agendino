@@ -17,6 +17,7 @@ AgenDino offers two transcription engines. You can choose between them per recor
 | **Runs on** | Google Cloud | Your machine |
 | **Speaker diarization** | ✅ Automatic | ✅ Optional (local pyannote) |
 | **Speaker labels** | ✅ Yes | ✅ With `LOCAL_DIARIZATION_ENABLED` |
+| **Speaker identification (real names)** | ❌ | ✅ With `SPEAKER_ID_ENABLED` (enrolled voices) |
 | **Timestamps** | ✅ Yes | ✅ Yes |
 | **Long recordings** | ⚠️ May truncate | ✅ Full transcription |
 | **Privacy** | Audio sent to Google | Fully offline |
@@ -88,6 +89,63 @@ rather than silently producing an unlabeled transcript.
 
 **Cost:** ~2–3 GB extra RAM (or VRAM) while loaded, and extra processing time — a small
 fraction of the audio duration on GPU, roughly 0.5–1.5× the audio duration on CPU.
+
+### Speaker identification (voice enrollment)
+
+Diarization alone labels voices anonymously (`Speaker 1`, `Speaker 2`, …). With speaker
+identification enabled, AgenDino remembers voices you name once and labels them with their
+**real name** in every future transcription — `[00:12] Andrew: …` instead of
+`[00:12] Speaker 1: …`.
+
+**How it works:** each Whisper+diarization run stores a compact voiceprint (a speaker
+embedding from the pyannote pipeline) per speaker, per recording. Naming a speaker saves
+that voiceprint as a profile; later transcriptions compare new voices against enrolled
+profiles by cosine similarity. Everything is local — voiceprints live in the SQLite
+database and never leave your machine.
+
+**Setup:** requires local diarization (above), plus:
+
+```env
+SPEAKER_ID_ENABLED=true
+```
+
+**Enrolling a voice:**
+
+1. Transcribe a recording with Whisper (with diarization enabled).
+2. Open the transcript → **Edit** → the "Rename speakers" editor appears.
+3. Rename e.g. `Speaker 1` to `Andrew`, tick **Remember voice**, and click **Apply**.
+4. Done — future recordings where Andrew speaks for at least ~5 seconds are labeled
+   `Andrew` automatically. Unrecognized voices keep the anonymous `Speaker N` numbering.
+
+Enrolling the same name again from another recording **refines** the profile (a running
+average), which improves matching across different rooms, microphones, and days. Manage
+or delete profiles via the **Voices** button in the same editor.
+
+**Applying to past recordings:** the Voices dialog has an **Apply to past recordings**
+button that re-checks old transcripts against the enrolled profiles and renames confident
+matches. Already-named speakers are never touched, and a match is skipped if that person's
+name already appears in the transcript.
+
+**Matching is deliberately conservative** — a wrong name in a transcript is worse than an
+anonymous one. A voice is only named when it clears a similarity threshold *and* clearly
+beats the second-best profile; anything ambiguous stays `Speaker N`. Tune with:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `SPEAKER_ID_ENABLED` | `false` | Master toggle (also needs `LOCAL_DIARIZATION_ENABLED=true`) |
+| `SPEAKER_ID_THRESHOLD` | `0.5` | Minimum cosine similarity to an enrolled profile. Raise if it names the wrong person; lower if it misses people it should know |
+| `SPEAKER_ID_MARGIN` | `0.05` | Required lead over the second-best profile — prevents coin-flips between two similar-sounding enrollees |
+
+**Notes & limits:**
+
+- Speakers with under ~5 seconds of speech in a recording don't get a stored voiceprint
+  (too little audio for a reliable signature) and can't be enrolled or matched from it.
+- Recordings transcribed before this feature have no stored voiceprints — re-transcribe
+  them to enable enrollment or retroactive naming.
+- Voiceprints are tied to the embedding model that produced them. If the diarization
+  model changes, old profiles are ignored for matching and show a **re-enroll needed**
+  badge in the Voices dialog.
+- Gemini transcription is unaffected — identification only runs on the local Whisper path.
 
 ### GPU acceleration
 

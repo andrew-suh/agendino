@@ -162,6 +162,16 @@ provider-agnostic.
   no silent unlabeled fallback). `DIARIZATION_DEVICE` (unset → follows `WHISPER_DEVICE`) is the only
   split-device knob that works in Docker, since compose hardcodes `WHISPER_DEVICE=auto` on celery.
   Word/turn merge logic: `merge_words_with_speakers` in `WhisperTranscriptionService.py`.
+- **Speaker identification** (`SPEAKER_ID_ENABLED`, needs diarization): each Whisper run stores
+  L2-normalized per-speaker voiceprints (`recording_speaker` table) **keyed by the transcript's
+  display label** ("Speaker N" or a matched name); enrolling ("Remember voice" in the rename UI)
+  copies/averages one into `speaker_profile`. Matching (`match_speakers_to_profiles`) is
+  conservative by design — `SPEAKER_ID_THRESHOLD` + `SPEAKER_ID_MARGIN` over the 2nd-best
+  profile, one label per profile, ambiguous stays anonymous; keep it that way. Embeddings are
+  stamped with `model_id` and never compared across models (stale profiles are skipped in
+  matching and badged "re-enroll needed"). The pyannote 3.x/4.x output difference (tuple via
+  `return_embeddings=True` vs `DiarizeOutput.speaker_embeddings`) is handled in `_diarize` —
+  keep both paths working.
 - **flake8:** keep module-level code (e.g. `logger = logging.getLogger(__name__)`) below imports
   (E402); the style CI will fail otherwise.
 - **Secrets:** `.env` is gitignored; `certs/*` is gitignored except `.gitkeep`; `__pycache__/`/`*.pyc`
